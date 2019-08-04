@@ -1,2 +1,4 @@
 # a56 files are source files written Motorola DSP56K assemby language
 *.a56 linguist-language=Assembly
+*.c linguist-language=C
+*.h linguist-language=C
