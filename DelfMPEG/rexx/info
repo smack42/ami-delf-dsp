@@ -1,0 +1,51 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx info */
+
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+GETSTATUS
+text='unknown'
+if result==0 then text='stop'
+if result==1 then text='play'
+if result==2 then text='pause'
+if result==10 then text='error: initDelfina failed'
+if result==20 then text='error: file not found'
+if result==30 then text='error: file not recognized as MPEG1 audio'
+say 'DelfMPEG status: ' || result || ' (' || text || ')'
+
+GETFILENAME
+say 'file name: ' || result
+
+GETFILETYPE
+say 'file type: ' || result
+
+GETDURATION
+say 'duration: ' || result || ' seconds'
+
+GETPOSITION
+say 'position: ' || result || ' seconds'
+
+say 'ID3v1 tag info'
+GETTITLE
+if result=='' then say '(none)'
+/*
+** note: it's safe to assume that the ID3 tag info is not available
+** if any of the strings is emtpy, then the others are emtpy, too.
+** this means that either the MPEG file has no ID3 tag or DelfMPEG
+** didn't read it because the SHOWTAG option was not specified.
+*/
+else do
+    say '  title: ' || result
+    GETARTIST
+    say ' artist: ' || result
+    GETALBUM
+    say '  album: ' || result
+    GETCOMMENT
+    say 'comment: ' || result
+    GETYEAR
+    say '   year: ' || result
+    GETGENRE
+    say '  genre: ' || result
+end

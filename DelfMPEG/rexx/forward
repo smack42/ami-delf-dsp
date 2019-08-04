@@ -1,0 +1,25 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx forward <seconds> */
+
+PARSE ARG seconds
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+if seconds=='' then do
+    say '(note: missing parameter <seconds> - default value 10)'
+    seconds=10
+end
+
+GETSTATUS
+if ((result==0) | (result>=10)) then do
+    say 'not applicable - player is in STOP mode'
+    return 5
+end
+
+GETPOSITION
+newpos=result+seconds
+GETDURATION
+if newpos>result then newpos=result
+
+SETPOSITION newpos

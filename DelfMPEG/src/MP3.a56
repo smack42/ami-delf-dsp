@@ -1,0 +1,2770 @@
+;*****************************************************************************
+;
+;    DelfMPEG - MPEG audio player for Delfina DSP
+;    Copyright (C) 1999-2003  Michael Henke
+;
+;    This program is free software; you can redistribute it and/or modify
+;    it under the terms of the GNU General Public License as published by
+;    the Free Software Foundation; either version 2 of the License, or
+;    (at your option) any later version.
+;
+;    This program is distributed in the hope that it will be useful,
+;    but WITHOUT ANY WARRANTY; without even the implied warranty of
+;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;    GNU General Public License for more details.
+;
+;    You should have received a copy of the GNU General Public License
+;    along with this program; if not, write to the Free Software
+;    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+;
+;*****************************************************************************
+
+
+
+;Delfina object DSP56K_MP3
+;memory map (for Amiga access)
+;
+; prog
+;    0 .. init
+;   +2 .. decode frame
+;
+; xdata
+;+2048 .. inbuf (framedata: +0..side info, +11 words..main_data)
+;
+; ydata
+;  +16 .. busy (Amiga read only, TRUE (NON-ZERO) if decoder is running)
+;  +17 .. forcemono (Amiga write)
+;  +18 .. pow43tab (8206 words; precalculated by main prog)
+;
+	include 'delfequ.inc'
+
+	org	p:
+;->prog
+	jmp	init
+;->prog+2
+
+
+
+;*****************************************************************************
+;
+; **** MPEG1 layer III frame decoder ****
+;
+; parameters
+;  x1 - mono          (mono: non_zero, stereo: zero)
+;  x0 - output buffer (1152 words in L-mem)
+;  y1 - modext        (from frame header: mode extension)
+;  y0 - /
+;
+;
+; uses ideas/code from:
+;   - MPEG Audio Layer II decoder by Fredrik Noring and Tomas Berndtsson
+;     (an mp2 player for Atari Falcon, DSP56K code)
+;   - amp11 by Niklas Beisert (clean and fast C++ code)
+;   - FalcAMP by Denis "STGhost" Huguet and David "Splash" Carrere
+;     (an mp3 player for Atari Falcon, DSP56K code)
+;   - reference code by MPEG Software Simulation Group ("the original" C code)
+;
+; Delfina DSP programming by Smack/Infect!
+;
+;
+; (Sun 09-Apr-2000) - finally: it's working!!
+;                     (but INTENSITY STEREO decoding is not implemented yet)
+; (Wed 26-Apr-2000) - optimized synthesis and hybrid filter routines
+; (Sat 29-Apr-2000) - optimized huffman decoding routines
+; (Tue 16-May-2000) - started implementing INTENSITY STEREO support
+;                     but it's not working yet (temporarily removed)
+; (Sun 16-Jul-2000) - optimized a little (tiny speedup only)
+; (Sun 01-Apr-2001) - fixed stupid bug which had caused minor distortions
+; (Sat 07-Apr-2001) - implemented INTENSITY STEREO decoding (at last)
+; (Wed 10-Oct-2001) - huffman decoding tiny speedup (now it's getting tricky)
+; (Thu 24-Oct-2002) - synthesis: corrected output level
+;                   - huffman/scaling: reorder short blocks only (less memory)
+;                   - scaling: skip zero scalefactor bands (tiny speedup)
+;
+;*****************************************************************************
+
+	move	x1,x:mono
+	move	x0,x:outbuf
+	clr	b	y1,x:modext
+	tfr	x1,a	#<1,b1
+	tst	a	#<2,a1
+	tne	b,a
+	move	a1,x:channels
+	move	a1,y:busy		;set BUSY to non-zero
+
+	move	#>inbuf,r7
+	jsr	getbits_init
+
+; WARNING:
+; the active 'getbits' routine occupies these registers: r5, r6, r7, b
+; (their contents must not be changed!!)
+;
+; 'getbits' is used in the bitstream processing routines:
+; * get side info
+; * read scalefactors
+; * read huffman
+;
+; this register limitation does not exist in the other parts of the decoder
+
+
+
+;*****************************************************************************
+;*** get side info
+;*****************************************************************************
+	clr	a	#<9,n7
+	jsr	(r5)			;getbits(9) - main_data_begin
+
+	move	x:mono,a
+	move	#>5,x0
+	tst	a	#<3,a1
+	tne	x0,a
+	clr	a	a1,n7
+	jsr	(r5)			;getbits(mono?5:3) - private_bits
+
+;****** read scalefactor selection info
+	move	x:mono,a
+	move	#>4,x0
+	tst	a	#<8,a1
+	tne	x0,a			;loops=mono?4:8
+	move	#>granule1_sfsi,r0
+	do	a1,read_sfsi
+	jsr	(r6)			;getbit1
+	move	a,x:(r0)+
+read_sfsi
+
+;****** read granule side info
+	move	#>si_tab,r3		;first granule
+	move	x:channels,n3
+	move	#<0,y1			;y1=bitpos
+	move	#<0,x1			;x1=granule_counter
+
+read_grsi_loop_head
+	do	n3,read_grsi_loop	;channels
+	move	x:(r3)+,r0		;r0=pointer to si_struct
+
+	clr	a	#<12,n7
+	jsr	(r5)			;getbits(12)
+	add	y1,a	y1,x:(r0)+	;si.grstart=bitpos
+	move		a,x:(r0)+	a,y1	;si.grend=bitpos_new
+	clr	a	#<9,n7
+	jsr	(r5)			;getbits(9)
+	lsl	a	#<8,n7		;*2
+	clr	a	a,x:(r0)+	a,y0	;si.regionend2  !!  y0
+	jsr	(r5)			;getbits(8)
+	move		a,x:(r0)+	;si.globalgain
+	clr	a	#<4,n7
+	jsr	(r5)			;getbits(4)
+	clr	a	a,x:(r0)+	;si.sfcompress
+	jsr	(r6)			;getbit1
+	jeq	read_grsi_block0
+
+	clr	a	#<2,n7
+	jsr	(r5)			;getbits(2)
+	clr	a	a,x:(r0)+	;si.blocktype
+	jsr	(r6)			;getbit1
+	move		a,x:(r0)+	;si.mixedblock
+	clr	a	#<5,n7
+	jsr	(r5)			;getbits(5)
+	clr	a	a,x:(r0)+	;si.tabsel0
+	jsr	(r5)			;getbits(5)
+	clr	a	a,x:(r0)+	;si.tabsel1
+	move		a,x:(r0)+	;si.tabsel2=0
+	do	#3,read_grsi_sbg_loop
+	clr	a	#<3,n7
+	jsr	(r5)			;getbits(3)
+	rep	#3
+	lsl	a
+	move		a,x:(r0)+	;si.subblockgain012 * 8 !!!!
+read_grsi_sbg_loop
+	move	#<36,a1
+	move	a1,x:(r0)		;si.regionend0
+	move	#>576,x0		;x0=si.regionend1
+	jmp	read_grsi_block0e
+
+read_grsi_block0
+	move		a,x:(r0)+	;si.blocktype =0
+	move		a,x:(r0)+	;si.mixedblock=0
+	move	#<5,n7
+	do	#3,read_grsi_tabsel_loop
+	jsr	(r5)			;getbits(5)
+	clr	a	a,x:(r0)+	;si.tabsel012
+read_grsi_tabsel_loop
+	rep	#3
+	move		a,x:(r0)+	;si.subblockgain012
+	move	#<4,n7
+	jsr	(r5)			;getbits(4)
+	move	#>1,x0
+	add	x0,a	x:sfbandl_p,r2	;+1
+	clr	a	a,n2
+	move	#<3,n7
+	jsr	(r5)			;getbits(3)
+	add	x0,a	n2,x0		;+1
+	add	x0,a	x:(r2+n2),x0	;+region0count
+	move	a,n2
+	move	x0,x:(r0)		;si.regionend0
+	move	x:(r2+n2),x0		;x0=si.regionend1
+
+read_grsi_block0e
+	move	x:(r0),a
+	cmp	y0,a			;? si.regionend0 > si.regionend2 ?
+	tpl	y0,a
+	tfr	x0,a	a,x:(r0)+	;si.regionend0
+	cmp	y0,a			;? si.regionend1 > si.regionend2 ?
+	tpl	y0,a
+	clr	a	a,x:(r0)+	;si.regionend1
+	jsr	(r6)			;getbit1
+	clr	a	a,x:(r0)+	;si.preflag
+	jsr	(r6)			;getbit1
+	move	#>1,y0
+	add	y0,a	#>32,y0
+	clr	a	a,x:(r0)+	;si.sfshift + 1 !!!!
+	jsr	(r6)			;getbit1
+	move	#<33,a1			;33
+	teq	y0,a			;32
+	move		a1,x:(r0)+	;si.tabsel3
+
+read_grsi_loop
+	tfr	x1,a	#<1,x1		;granule_counter
+	tst	a	#>si_tab+2,r3
+	jeq	read_grsi_loop_head	;second granule
+
+
+
+
+
+
+
+;*****************************************************************************
+;****** for(gr=0;gr<ngr;gr++)		;decode 2 granules
+	move	#>si_tab,r0
+	move	#>granule0_sfsi,n0
+	clr	a	x:outbuf,r1
+
+decode_granule_loop
+	move	r0,x:si_granule_tab_p
+	move	n0,x:sfsi_p
+	move	r1,x:outbuf
+	move	a,x:granule_counter
+
+;*****************************************************************************
+;****** for(ch=0;ch<stereo;ch++)	;read+scale 1 or 2 channels
+	move	#>scalefac0,r3
+	move	x:channels,a
+	move	#>xr0,r1
+
+scale_channel_loop
+	move	r0,x:si_tab_p
+	move	r1,x:xr_p
+	move	a,x:channel_counter
+	move	r3,x:scalefac_p
+	
+
+;****** move bitstream pointer to si.grstart
+	move	x:si_tab_p,r1
+	move	#>inbuf+11,r7		;skip sideinfo
+	clr	b	x:(r1),r1	;r1=si_struct			!! r1
+	move	#<24,b1
+	move	x:(r1),a		;si.grstart
+move_to_grstart
+	sub	b,a	(r7)+
+	jgt	move_to_grstart
+	add	b,a	(r7)-
+	jsr	getbits_init		;skip bits (24bit words)
+	tst	a	a,n7
+	jsne	(r5)			;getbits
+	move	#<sfcompress-si0,n1
+	move	x:(r1),b0		;si.grstart - correct bit counter!
+
+
+;*****************************************************************************
+;*** read scalefactors
+;*****************************************************************************
+	move	x:(r1+n1),n2		;si.sfcompress
+	move	#>slentab0,r2
+	move	#>newslen,r0
+	move	x:(r2+n2),a
+	move	a,x:(r0)+		;newslen0=slentab0[si.sfcompress]
+	move	#>slentab1,r2
+	move	a,x:(r0)+		;newslen1=slentab0[si.sfcompress]
+	move	x:(r2+n2),a
+	move	a,x:(r0)+		;newslen2=slentab1[si.sfcompress]
+	move	#<blocktype-si0,n1
+	move	a,x:(r0)+		;newslen3=slentab1[si.sfcompress]
+;****** select sfbtab
+	move	x:(r1+n1),a		;si.blocktype
+	move	#>2,x0
+	cmp	x0,a	#>sfbtab0,a	;sfb=sfbtab0  (blocktype!=2)
+	jne	read_sf_ne2
+	move	#<mixedblock-si0,n1
+	move	#>sfbtab1,x0
+	move	x:(r1+n1),a		;si.mixedblock
+	tst	a	#>sfbtab2,a	;sfb=sfbtab2  (mixedblock)
+	teq	x0,a			;sfb=sfbtab1  (!mixedblock)
+read_sf_ne2
+	move	a,r2			;r2=sfb
+	move	x:sfsi_p,r1		;r1=sfsi
+	move	#>newslen,r0		;r0=newslen  ;r3=sfp (scalefac0/1)
+
+;****** read scalefactors
+	do	#4,read_sf_loop0
+	move	x:(r2)+,x0		;sfb[i]
+	move	x:(r2),a		;sfb[i+1]
+	sub	x0,a
+	move	x:(r1)+,a	a,y0	;sfsi[i]
+	tst	a		y0,n3	;sfb[i+1]-sfb[i]
+	move	x:(r0)+,a		;newslen[i]
+	jne	read_sf_skip		;if(!sfsi[i])
+
+	do	n3,read_sf_loop1	;for(k=sfb[i];k<sfb[i+1];k++)
+	clr	a		a,x0
+	cmp	x0,a		x0,n7
+	jsne	(r5)			;getbits
+	move	a,x:(r3)+	x0,a	;*sfp++=getbits(newslen[i])
+read_sf_loop1
+	move	(r3)-n3
+
+read_sf_skip
+	move	(r3)+n3			;else sfp+=sfb[i+1]-sfb[i]
+read_sf_loop0
+
+	clr	a	r1,x:sfsi_p
+	move	a,x:(r3)+
+	move	a,x:(r3)+
+	move	a,x:(r3)+
+
+
+
+;*****************************************************************************
+;*** read huffman
+;*****************************************************************************
+	move	x:si_tab_p,r1
+	move	#<blocktype-si0,n1
+	move	x:(r1),r1		;r1=si_struct			!! r1
+
+;****** read region0
+	move	#<regionend0-si0,n1
+	move	x:xr_p,r3		;r3=xr (output)
+	move	#>pow43tab,r4		;r4=pow43tab
+	move	x:(r1+n1),a		;si.regionend0
+	asr	a	#<tabsel0-si0,n1
+	move	a,n3			;n3=loop_count
+	tst	a	x:(r1+n1),n0	;si.tabsel0
+	jsgt	huff_region012
+;****** read region1
+	move	#<regionend0-si0,n1
+	nop
+	move	x:(r1+n1),x0		;si.regionend0
+	move	#<regionend1-si0,n1
+	nop
+	move	x:(r1+n1),a		;si.regionend1
+	sub	x0,a
+	asr	a	#<tabsel1-si0,n1
+	move	a,n3			;n3=loop_count
+	tst	a	x:(r1+n1),n0	;si.tabsel1
+	jsgt	huff_region012
+;****** read region2
+	move	#<regionend1-si0,n1
+	nop
+	move	x:(r1+n1),x0		;si.regionend1
+	move	#<regionend2-si0,n1
+	nop
+	move	x:(r1+n1),a		;si.regionend2
+	sub	x0,a
+	asr	a	#<tabsel2-si0,n1
+	move	a,n3			;n3=loop_count
+	tst	a	x:(r1+n1),n0	;si.tabsel2
+	jsgt	huff_region012
+
+	jmp	huff_region012_end
+
+;--vv-------------------------------vv--
+huff_region012
+	move	#>htablinbits,r0
+	move	#>15,x1			;x1=#15				!! x1
+	move	x:(r0+n0),n2		;n2=linbits
+	move	#>htabs,r0
+	move	r1,n1			;save r1
+	move	x:(r0+n0),n5		;n5=htab
+	move	#>huff_dec012_end,r6	;r6=huff_dec012_end
+	move	#>huff_dec012_gb_ne1,r2	;r2=huff_dec012_gb_ne1
+	move	#<$10,y1		;y1=#$100000 - shift 3 bits	!! y1
+
+	do	n3,huff_loop012
+	move	n5,r0			;tab
+;---faster huffman decoder
+;-based on the assumption that the overhead for "do/enddo" pays off
+;-when the loop is taken several times (more than twice?)
+	do	#999,huff_dec012_end	;"inifinite loop"
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)	;huff_dec012_end	;return v
+;-nop-	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r2)	;huff_dec012_gb_ne1
+	move	x:(r7)+,b1
+	rol	b
+huff_dec012_gb_ne1
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	inc	b	;useful for required AGU delay
+huff_dec012_end
+	enddo				;end of "infinite loop"
+
+	lsr	a			;x=val>>4
+	jeq	huff_r012_zero_0
+	eor	x1,a	a,n4		;if(x==15)
+	jne	huff_r012_ne15_0
+	clr	a	n2,y0
+	cmp	y0,a	n2,n7
+	jsne	(r5)			;getbits(linbits)
+	add	x1,a			;+15
+	move	a,n4
+huff_r012_ne15_0
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_gb_ne_0
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_gb_ne_0
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_zero_0
+	tfr	x0,a	a,x:(r3)+	;xr[i+0]=v
+
+	and	x1,a	n2,y0		;x=val&15 
+	jeq	huff_r012_zero_1
+	eor	x1,a	a,n4		;if(x==15)
+	jne	huff_r012_ne15_1
+	cmp	y0,a	n2,n7
+	jsne	(r5)			;getbits(linbits)
+	add	x1,a			;+15
+	move	a,n4
+huff_r012_ne15_1
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_gb_ne_1
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_gb_ne_1
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_zero_1
+	move		a,x:(r3)+	;xr[i+1]=v
+huff_loop012
+
+	move	n1,r1			;restore r1
+	rts
+;--^^-------------------------------^^--
+huff_region012_end
+
+
+;****** read region3
+	move	#<regionend2-si0,n1
+	move	#>576,a
+	move	x:(r1+n1),x0		;si.regionend2
+	move	#<grend-si0,n1
+	sub	x0,a	#>huff_dec3_gb_ne1,r6
+	asr	a	x:(r1+n1),x1	;si.grend			!! x1
+	asr	a	#<tabsel3-si0,n1
+	move	#>htabs,r0
+	move	x:(r1+n1),n0		;si.tabsel3
+	jle	huff_region3_end	;--> skip ( because regionend2>=576 )
+	move	x:(r0+n0),n1		;n1=htab
+	move	a,x0	y:pow43tab+1,a
+	neg	a	a,n2		;n2= pow43tab[1]		!! n2
+	tfr	x0,a	a,y0		;y0=-pow43tab[1]		!! y0
+	move	#>huff_dec3,r1
+	move	#>huff_dec3_gb_ne0,r5
+
+
+	do	a,huff_loop3
+	move	b0,a			;bit counter
+	cmp	x1,a	n1,r0		;tab
+	jmi	huff_dec3_start		;while(huffbit<si.grend)
+	enddo
+	jmp	huff_loop3
+huff_dec3_start
+;---faster huffman decoder
+;-based on the knowledge that the first table entry is always negative.
+	inc	b	;---getbit1 inline
+	lsl	b	x:(r0)+,n0	;v=*tab++
+	jne	(r5)	;huff_dec3_gb_ne0
+	move	x:(r7)+,b1
+	rol	b
+huff_dec3_gb_ne0
+	jcc	(r1)	;huff_dec3	;if(getbit1)
+	move	(r0)-n0			;tab-=v
+huff_dec3
+	clr	a	x:(r0)+,x0	;v=*tab++
+	jclr	#23,x0,huff_dec3_end	;if(v>=0) return v
+	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r6)	;huff_dec3_gb_ne1
+	move	x:(r7)+,b1
+	rol	b
+huff_dec3_gb_ne1
+	jcc	(r1)	;huff_dec3	;if(getbit1)
+	move	(r0)-n0			;tab-=v
+	jmp	(r1)	;huff_dec3
+huff_dec3_end
+
+	jclr	#3,x0,huff_r3_zero_3	;if(x=(val>>3)&1)
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_gb_ne_3
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_gb_ne_3				;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_zero_3
+	clr	a	a,x:(r3)+	;xr[i+0]=x
+
+	jclr	#2,x0,huff_r3_zero_2	;if(x=(val>>2)&1)
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_gb_ne_2
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_gb_ne_2				;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_zero_2
+	clr	a	a,x:(r3)+	;xr[i+1]=x
+
+	jclr	#1,x0,huff_r3_zero_1	;if(x=(val>>1)&1)
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_gb_ne_1
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_gb_ne_1				;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_zero_1
+	clr	a	a,x:(r3)+	;xr[i+2]=x
+
+	jclr	#0,x0,huff_r3_zero_0	;if(x=val&1)
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_gb_ne_0
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_gb_ne_0				;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_zero_0
+	move		a,x:(r3)+	;xr[i+3]=x
+huff_loop3
+
+huff_region3_end
+
+; from now on we can use all registers again
+; because 'getbits' is no longer active (r5, r6, r7, b)
+
+;set the remaining samples to zero
+	move		#>576,y0	;y0=576 !!
+	clr	b	x:xr_p,a
+	add	y0,a	r3,x0		;a=end of xr
+	sub	x0,a	r3,x:xr_zero_p	;a=end - current
+	jle	huff_clear_loop
+	do	a,huff_clear_loop
+	move		b,x:(r3)+
+huff_clear_loop
+
+
+
+
+;--INTENSITY STEREO-- find highest non-zero sample
+	move		x:modext,a		;IS: bit0=1
+	lsr	a	x:channel_counter,b
+	jcc	is_skip_zero			;skip if not IS
+	lsr	b	#>xr1+576-1,r0
+	jne	is_skip_zero			;skip if not second channel
+	tfr	y0,a	#>1,x0			;y0=576 (from huff_clear_loop)
+	move		#>is_find_zero,r4
+is_find_zero
+	sub	x0,a	x:(r0)-,b
+	tst	b
+	jeq	(r4)	;is_find_zero
+	tst	a	#<0,x0
+	tmi	x0,a
+	move		a,x:x_is_nonzero
+is_skip_zero
+
+
+
+;*****************************************************************************
+;*** scale samples
+;*****************************************************************************
+	move	x:si_tab_p,r1
+	move	#<blocktype-si0,n1
+	move	x:(r1),r1		;r1=si_struct			!! r1
+;****** number of LONG and SHORT bands
+	clr	b	#>2,x0
+	move	x:(r1+n1),a		;si.blocktype
+	move	#<13,b1			;s_min=13 (blocktype!=2)
+	cmp	x0,a	#<22,a1		;l_max=22 (blocktype!=2)
+	jne	scale_ne2
+	move	#<mixedblock-si0,n1
+	move	#<0,x0
+	move	x:(r1+n1),a		;si.mixedblock
+	move	#<3,b1			;s_min=3  (mixedblock)
+	tst	a	#<8,a1		;l_max=8  (mixedblock)
+	teq	x0,b			;s_min=0  (!mixedblock)
+	teq	x0,a			;l_max=0  (!mixedblock)
+scale_ne2
+	move	#<globalgain-si0,n1
+	move	b,n5			;n5=s_min
+	move	x:(r1+n1),n6		;n6=si.globalgain
+	move	x:scalefac_p,r2		;r2=sfp
+	move	#<sfshift-si0,n1
+	move	#x_quantab,n4		;n4=quantab
+	move	x:(r1+n1),n2		;n2=si.sfshift (+1 = 1 or 2)
+	move	#<subblockgain0-si0,n1
+	move	#>pretab,r4		;r4=pretab
+	lua	(r1)+n1,r7		;r7=&si.subblockgain0
+
+
+;****** scale LONG bands
+	tst	a	a,x1
+	jeq	scale_l_loop0		;-->skip ( because l_max==0 )
+	move	#<preflag-si0,n1
+	move	x:xr_p,r0		;r0=xr
+	move	x:(r1+n1),n0		;n0=si.preflag
+	move	x:sfbandl_p,r5		;r5=bil
+	move	n0,a			;preflag
+	move	x:xr_zero_p,n1		;n1=xr_zero_p
+
+	do	x1,scale_l_loop0	;for (j=0; j<l_max; j++)
+	move		n1,b		;xr_zero_p
+	move		r0,x1
+	sub	x1,b
+	jle	scale_l_skip		;skip (because all samples are zero)
+	tst	a	x:(r4)+,x1	;pretab[j]
+	tne	x1,a			;a=(preflag ? pretab[j] : 0)
+	move		x:(r2)+,x1	;*sfp++
+	add	x1,a	n6,x0		;a+=sf  ;gg
+	rep	n2
+	lsl	a	r0,r1		;a<<=sfshift (1 or 2)
+	neg	a	#<0,y0		;a=-a	;y0=0 (for DP Multiply mode!!)
+	add	x0,a	n4,r3		;a+=gg  ;quantab
+	tmi	y0,a
+	lsl	a	x:(r5)+,x1	;a<<=1  ;bil[j]
+	move	a,n3
+	move		x:(r5),b	;bil[j+1]
+	sub	x1,b	(r3)+n3		;quantab[gg-(sf+pre)<<shift]
+	move		x:(r3)+,x1	;MSP
+	clr	a	x:(r3),x0	;LSP	;a=0 (for DP Multiply mode!!)
+
+;this is the "fastest" version of the Double Precision Multiply scaling loop
+;(no checks for overflow; no "move #0,a" between two calculations)
+;(assumption: the results are ALWAYS in the __lowest_18bit_of_a0__ only)
+	lsr	b	x:(r0),y1
+	ori	#$40,mr		;enter Double Precision Multiply mode
+	do	b,scale_l_loop1		;for (i=bil[j]; i<bil[j+1]; i++)
+	mac	x0,y1,a	(r0)+		;LSP*SP
+	mac	y1,x1,a	x:(r0)+,y1	;shifted(a)+SP*MSP
+	mac	x0,y1,a	a0,x:(r1)+	;LSP*SP
+	mac	y1,x1,a	x:(r0),y1	;shifted(a)+SP*MSP
+	move		a0,x:(r1)+
+scale_l_loop1
+	andi	#$bf,mr		;exit Double Precision Multiply mode
+scale_l_skip
+	move	n0,a			;preflag
+scale_l_loop0
+
+
+;****** scale SHORT bands
+	clr	a	n5,x1		;s_min
+	move	#<13,a1
+	sub	x1,a	x:sfbands_p,r5
+	jle	scale_s_loop0		;--> skip ( because s_min>=13 )
+
+	move		x:xr_p,r0
+	move		(r5)+n5		;r5=&bis[s_min]
+	move		x:(r5),n0
+	move		n4,n5		;n5=quantab
+	move		(r0)+n0		;r0=&xr[bis[s_min]]
+	move		#<3,n1
+	move		#y_reorder,n7	;n7=&reorder[0]
+	move		n7,r4		;r4=&reorder[0]
+
+	do	a,scale_s_loop0		;for (j=s_min; j<13; j++)
+	move		x:xr_zero_p,b
+	move		r0,x1
+	sub	x1,b	x:(r5)+,x1	;bis[j]
+	jle	scale_s_skip
+	move		x:(r5),a	;bis[j+1]
+	sub	x1,a	#>$2aaaaa,x0
+	move	a,x1			;(bis[j+1]-bis[j])/3
+	mpyr	x0,x1,b	r7,r6		;r6=&si.subblockgain0
+	lsr	b	r0,n0		;b=(inner loop count)    ;n0=&xr[bis[j]]
+	move		a,n4		;n4=(copy loop count)
+
+	do	#3,scale_s_loop1	;for (k=0; k<3; k++)
+	move		x:(r2)+,a	;a=*sfp++
+	rep	n2
+	lsl	a	x:(r6),x1	;a<<=sfshift (1 or 2)
+	;				;x1=si.subblockgain[k]  (* 8 !!!!)
+	add	x1,a	n6,x0		;a+=sbg ;gg
+	neg	a	#<0,y0		;a=-a	;y0=0 (for DP Multiply mode!!)
+	add	x0,a	(r6)+		;a+=gg
+	tmi	y0,a
+	lsl	a	n5,r3		;a<<=1	;quantab
+	move	a,n3
+	move		r4,r1		;r1=&reorder[k]
+	move		(r3)+n3		;quantab[gg-sf<<shift-sbg]
+	move		x:(r3)+,x1	;MSP
+	clr	a	x:(r3),x0	;LSP	;a=0 (for DP Multiply mode!!)
+
+;this is the "fastest" version of the Double Precision Multiply scaling loop
+;(no checks for overflow; no "move #0,a" between two calculations)
+;(assumption: the results are ALWAYS in the __lowest_18bit_of_a0__ only)
+	ori	#$40,mr			;enter Double Precision Multiply mode
+	move		x:(r0),y1
+	do	b,scale_s_loop2		;for (i=bis[j]; i<bis[j+1]; i+=3)
+	mac	x0,y1,a	(r0)+		;LSP*SP
+	mac	y1,x1,a	x:(r0)+,y1	;shifted(a)+SP*MSP
+	mac	x0,y1,a	a0,y:(r1)+n1	;LSP*SP  ;store in y_reorder
+	mac	y1,x1,a	x:(r0),y1	;shifted(a)+SP*MSP
+	move		a0,y:(r1)+n1	;store in y_reorder
+scale_s_loop2
+	andi	#$bf,mr			;exit Double Precision Multiply mode
+
+	move		(r4)+		;r4=&reorder[k+1]
+scale_s_loop1
+
+	move		n7,r4		;r4=&reorder[0]
+	move		n0,r1		;n0=&xr[bis[j]]
+	move			y:(r4)+,a
+	do	n4,scale_s_skip
+	move	a,x:(r1)+	y:(r4)+,a	;copy from y_reorder back to xr
+scale_s_skip
+	move		n7,r4		;r4=&reorder[0]
+scale_s_loop0
+
+
+	move	x:si_tab_p,r0
+	move	#>scalefac1,r3
+	move	#>xr1,r1
+	move	x:channel_counter,a
+	lsr	a	(r0)+
+	jne	scale_channel_loop	;next channel
+
+;****** for(ch=0;ch<stereo;ch++)	;end************************
+
+
+
+
+
+
+
+;*****************************************************************************
+;*** joint-stereo processing
+;*****************************************************************************
+	clr	b	x:modext,a
+	tst	a	#<2,b1
+	jeq	js_end				;modext==0 -> no joint-stereo
+	cmp	b,a	#>xr0,r0
+	move		#>xr1,r1
+	jne	js_modext_1_3
+
+;****** modext==2 - MID/SIDE STEREO for all samples
+	move	r1,r2
+	move	#0.70710678,y0			;sqrt(0.5)
+	move			x:(r0),x0
+	mpy	x0,y0,a		x:(r1)+,x1
+	macr	x1,y0,a
+	mpy	x0,y0,b		a,x:(r0)+
+	macr	-x1,y0,b	x:(r0),x0
+	do	#576-1,js_ms_loop
+	mpy	x0,y0,a		x:(r1)+,x1
+	macr	x1,y0,a		b,x:(r2)+
+	mpy	x0,y0,b		a,x:(r0)+
+	macr	-x1,y0,b	x:(r0),x0
+js_ms_loop
+	move			b,x:(r2)+
+	jmp	js_end
+
+
+
+;****** modext==1 or 3 - INTENSITY STEREO
+js_modext_1_3
+	move		#>scalefac1,r2		;scalefac1		!! r2
+	move		#>ktab,r6		;ktab			!! r6
+	clr	b	x:si_tab_p,r3
+	move		#<blocktype-si0,n3
+	move		#<2,b1
+	move		x:(r3),r3
+	move		x:x_is_nonzero,x1	;			!! x1
+	move		x:(r3+n3),x0		;si.blocktype
+	cmp	x0,b	a,n7			;n7=modext		!! n7
+	jeq	js_is_blocktype2
+
+;** blocktype != 2 (long bands only)
+;r0=xr0   r1=xr1   r2=scalefac1   r6=ktab   x1=is_nonzero   n7=modext
+	move		#>scalefac1+20,r3
+	move		x:sfbandl_p,r5		;r5 !!
+	move		r5,r4	;r4 - for limitloop
+	move		x:(r3)+,x0
+	move		x0,x:(r3)		;copy sf[20] to sf[21]
+	move		r2,r3	;r3 - for limitloop
+	;------	find scalefactor boundary where INTENSITY STEREO begins
+js_is_limitloop_long
+	move		x:(r4)+,a		;bil[i]
+	cmp	x1,a	#<7,b1
+	jgt	js_is_limit_long		;? bil[i] > is_nonzero ?
+	move		b1,x:(r3)+		;scalefactor=7 (no IS)
+	jmp	js_is_limitloop_long
+js_is_limit_long
+	;------	process all scalefactor bands
+	do	#22,js_is_loop_long
+	move		x:(r5)+,x0		;bil[i]
+	clr	b	x:(r5),a		;bil[i+1]
+	sub	x0,a	#<7,b1
+	move		x:(r2)+,x0		;sf[i]
+	cmp	x0,b	a,n0
+	move		a,n1
+	move		x0,n6
+	move		x:(r0),x0
+	jeq	js_is_sf7_long
+	;------	scalefactor != 7
+	move		l:(r6+n6),y		;y1=ktab[sf][0]  y0=ktab[sf][1]
+	do	n0,js_is_isloop_long
+	mpyr	x0,y1,a
+	mpyr	x0,y0,a		a,x:(r0)+
+	move			x:(r0),x0
+	move			a,x:(r1)+
+js_is_isloop_long
+	jmp	js_is_msloop_long		;rewind xr pointers
+	;------	scalefactor == 7
+js_is_sf7_long
+	jclr	#1,n7,js_is_skipms_long		;? is it MID/SIDE STEREO ?
+	move		#0.70710678,y0		;sqrt(0.5)
+	do	n0,js_is_msloop_long
+	mpy	x0,y0,a		x:(r1),x1
+	macr	x1,y0,a
+	mpy	x0,y0,b		a,x:(r0)+
+	macr	-x1,y0,b	x:(r0),x0
+	move			b,x:(r1)+
+js_is_msloop_long
+	move		(r0)-n0			;rewind xr pointers
+	move		(r1)-n1
+js_is_skipms_long
+	move		(r0)+n0			;forward xr pointers
+	move		(r1)+n1
+js_is_loop_long
+	jmp	js_end
+
+
+;!! this implementation is still missing some features !!
+;-mixed blocks are not handled here
+;-the IS-boundary is not detected 100% correctly for short bands
+;this could result in some minor (hardly audible) distortions when playing
+;mp3 files that actually use those these features (_most_ files do not!)
+
+js_is_blocktype2
+;** blocktype == 2 (short bands)
+;r0=xr0   r1=xr1   r2=scalefac1   r6=ktab   x1=is_nonzero   n7=modext
+	move		#>scalefac1+33,r3
+	move		#<2,n3
+	move		x:sfbands_p,r5		;r5 !!
+	move		x:(r3)+,x0
+	move		x0,x:(r3+n3)		;copy sf[33] to sf[36]
+	move		x:(r3)+,x0
+	move		x0,x:(r3+n3)		;copy sf[34] to sf[37]
+	move		x:(r3)+,x0
+	move		x0,x:(r3+n3)		;copy sf[35] to sf[38]
+	move		x1,n2			;n2=is_nonzero
+	move		r0,r3
+	move		r1,r4
+	;------	process all scalefactor bands
+	do	#13,is_short_loop
+	move		x:(r5)+,x0		;bis[i]
+	move		x:(r5),a		;bis[i+1]
+	move		x0,n3
+	move		x0,n4
+	sub	x0,a	#>$2aaaaa,x0
+	move		a,x1
+	mpyr	x0,x1,a	#<3,n0			;(bis[j+1]-bis[j])/3
+	move		a,n5			;(inner loop counter)
+	;------	three scalefactors in each band
+	do	#3,is_short_3_loop
+	lua	(r3)+n3,r0
+	lua	(r4)+n4,r1
+	clr	b	x:(r2)+,x0		;sf[i]
+	move		#<7,b1
+	cmp	x0,b	#<3,n1
+	jeq	is_short_sf7			;? scalefactor == 7 (SKIP) ?
+	move		n3,a			;bis[i]  ??? + 0/1/2 ???
+	move		n2,x1			;is_nonzero
+	cmp	x1,a	x0,n6
+	jle	is_short_sf7			;? in NON-ZERO region (SKIP) ?
+	;------	scalefactor != 7
+	move		x:(r0),x0
+	move		l:(r6+n6),y		;y1=ktab[sf][0]  y0=ktab[sf][1]
+	do	n5,is_short_isloop
+	mpyr	x0,y1,a
+	mpyr	x0,y0,a		a,x:(r0)+n0
+	move			x:(r0),x0
+	move			a,x:(r1)+n1
+is_short_isloop
+	jmp	is_short_msloop
+	;------	scalefactor == 7
+is_short_sf7
+	jclr	#1,n7,is_short_msloop		;? is it MID/SIDE STEREO ?
+	move		#0.70710678,y0		;sqrt(0.5)
+	move			x:(r0),x0
+	do	n5,is_short_msloop
+	mpy	x0,y0,a		x:(r1),x1
+	macr	x1,y0,a
+	mpy	x0,y0,b		a,x:(r0)+n0
+	macr	-x1,y0,b	x:(r0),x0
+	move			b,x:(r1)+n1
+is_short_msloop
+	move		x:(r3)+,x0	y:(r4)+,y0	;advance pointers r3, r4
+is_short_3_loop
+	rep	#3
+	move		x:(r3)-,x0	y:(r4)-,y0	;rewind pointers r3, r4
+is_short_loop
+
+
+js_end
+
+
+
+
+
+;*****************************************************************************
+;****** for(ch=0;ch<stereo;ch++)	;filter+synthesize 1 or 2 channels
+	move	x:si_granule_tab_p,r0
+	move	#>xr0,r1
+	move	#>hybrid_prev0,r2
+	move	#>synth_audio_l_p,r3
+	move	x:channels,a
+
+hybrid_synth_channel_loop
+	move	r0,x:si_tab_p
+	move	r1,x:xr_p
+	move	r2,x:prev_p
+	move	r3,x:synth_audio_pp
+	move	a,x:channel_counter
+
+
+;*****************************************************************************
+;*** hybrid filter
+;*****************************************************************************
+	move	x:si_tab_p,r1
+	move	#<blocktype-si0,n1
+	clr	b	x:(r1),r1	;r1=si_struct
+;****** select LONG / SHORT limit
+	move	#<2,b1
+	clr	a	x:(r1+n1),x0	;x0=si.blocktype
+	cmp	x0,b	#<32,a1		; a=lim=32 (blocktype!=2)
+	jne	hybrid_block_ne2
+	move	#<mixedblock-si0,n1
+	move	#<0,x0			;x0=0 (blocktype in mixedblock)
+	move	x:(r1+n1),a		;si.mixedblock
+	tst	a	b,a		; a=lim=2  (mixedblock)
+	teq	x0,a			; a=lim=0  (!mixedblock)
+hybrid_block_ne2
+
+	move	a,n1			;n1=lim              !! IMDCT !!
+	clr	b	#<36,n0
+	cmp	x0,b	#>imdct_windows,r0
+	jeq	hybrid_win0		;;had been 'jle'  ... stupid bug!
+	rep	x0
+	move	(r0)+n0			;r0=&win[blocktype]  !! IMDCT !!
+hybrid_win0
+
+
+;****** antialias butterflies
+	move	#<1,b1
+	sub	b,a	x:xr_p,r4
+	jle	antialias_loop		;--> skip  ( because lim<=1 )
+
+	move	#<18,n4
+	move	x:cs_ca_tab_p,r3
+	movec	#<16-1,m3		;modulo-16 addressing
+	move	(r4)+n4			;upper band
+	move	r4,r2			;upper band
+	lua	(r4)-,r5		;lower band
+	move	#<18-8+1,n2
+	move	#<18-8+1,n4
+	move	#<18+8,n5
+	move			x:(r5),x0	y:(r3)+,y0
+	move	(r5)-n5
+
+	do	a,antialias_loop
+	mpy	x0,y0,a		x:(r4)+,x1	y:(r3)+,y1
+	macr	-x1,y1,a	(r5)+n5				;update r5
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+,x1
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0
+	macr	x0,y1,b		x:(r5),x0	y:(r3)+,y1
+	mpy	x0,y0,a		x:(r4)+n4,x1			;update r4
+	macr	-x1,y1,a	b,x:(r2)+
+	mpy	x1,y0,b		a,x:(r5)-	y:(r3)+,y0	;!y0
+	macr	x0,y1,b		x:(r5+n5),x0			;!x0
+	move			b,x:(r2)+n2			;update r2
+antialias_loop
+
+	movec	m7,m3			;linear addressing
+
+
+
+	move	x:xr_p,r7		;r7=xr				!! r7
+	move	x:prev_p,n6		;n6=prev			!! n6
+	move	#<0,n2			;n2=sb&1 (even or odd subband)	!! n2
+
+;****** IMDCT for LONG bands
+	move	n1,a			;lim
+	tst	a	r0,n7		;n7=&win[blocktype]		!! n7
+	jle	imdct_l_loop0		;--> skip  ( because lim<=0 )
+	do	a,imdct_l_loop0
+
+;-- 1. input aliasing for 36pts idct
+	move	r7,r1				;get r1 (input pointer)
+	move	x:synth_imfct_p,r5		;r5=imdct input area
+	movec	#<18-1,m5			;m5 -> modulo-18 addressing
+	move		x:(r1)+,a
+	move		x:(r1)+,x0	a,y0
+	add	x0,a	x:(r1)+,x0	a,y:(r5)+
+	sub	y0,a	x:(r1)+,x1	a,y:(r5)+
+	add	x0,a	x0,y1
+	add	y0,a	x:(r1)+,x0	a,y:(r5)+
+	add	x1,a	x1,b
+	do	#3,imdct_l_input_alias
+	add	x0,b	x0,y0
+	move		x:(r1)+,x1	a,y:(r5)+
+	add	y1,b	x:(r1)+,x0	b,y:(r5)+
+	add	x1,b	x1,a
+	add	x0,a	x0,y1
+	move		x:(r1)+,x1	b,y:(r5)+
+	add	y0,a	x:(r1)+,x0	a,y:(r5)+
+	add	x1,a	x1,b
+imdct_l_input_alias
+	add	x0,b	#<9-1,n0
+	move		x:(r1)+,x1	a,y:(r5)+
+	add	y1,b			b,y:(r5)+
+	add	x1,b	#<4,n5
+	move				b,y:(r5)+
+
+;-- 2. 9pts idct/butterflies/twiddle factors for even indices,
+;      and 36pts idct twiddle factors
+	move	r5,r0				;r0=&e0 (9 words in X: mem)
+	move	#>imdct_l_tab,r2		;r2=imdct coefficients
+	lua	(r0)+n0,r1			;r1=&e7 (should be named e8!)
+	move				y:(r5)+n5,y0	;;;
+	tfr	y0,a	x:(r2)+,x0	y:(r5)+n5,y1
+
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x1	y:(r5)+n5,y0	;>>> 0.5	!! x1
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp0/2
+	asl	a					;a=tmp0
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b			y:(r5)+n5,y0	;b'=tmp0_/2
+	addl	a,b			y:(r5)+n5,y1	;b=b'*2+a=b+a=e0 >>>0.5
+	subl	b,a	b,x:(r0)+		;a=a*2-b=2*a-(b+a)=a-b=e7
+	tfr	y0,a	a,x:(r1)-
+
+	mac	x1,y1,a			y:(r5)+n5,y0	;>>> -0.5
+	mac	-x1,y0,a		y:(r5)+n5,y0	;>>> -1
+	sub	y0,a			y:(r5)+n5,y0	;>>> -0.5
+	mac	-x1,y0,a x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp1/2  >>> 1.73/2
+	asl	a			(r5)+n5		;a=tmp0  >>> 0
+	mpy	x0,y0,b			y:(r5)+n5,y0	;>>> -1.73/2
+	mac	-x0,y0,b		y:(r5)+n5,y0	;>>> -1.73/2
+	mac	-x0,y0,b		y:(r5)+n5,y0	;b'=tmp1_/2	;;;
+	addl	a,b	x:(r2)+,x0	y:(r5)+n5,y1	;b=b'*2+a=b+a=e1
+	subl	b,a	b,x:(r0)+		;a=a*2-b=2*a-(b+a)=a-b=e6
+	tfr	y0,a	a,x:(r1)-
+
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a			y:(r5)+n5,y0	;>>> 0.5
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp2/2
+	asl	a					;a=tmp2
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b			y:(r5)+n5,y0	;b'=tmp2_/2	;;;
+	addl	a,b	x:(r2)+,x0	y:(r5)+n5,y1	;b=b'*2+a=b+a=e2
+	subl	b,a	b,x:(r0)+		;a=a*2-b=2*a-(b+a)=a-b=e5
+	tfr	y0,a	a,x:(r1)-
+
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a			y:(r5)+n5,y0	;>>> 0.5
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp3/2
+	asl	a	#<18,n0		;!;		;a=tmp3
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b			y:(r5)+n5,y0	;b'=tmp3_/2	;;;
+	addl	a,b			y:(r5)+n5,y1	;b=b'*2+a=b+a=e3
+	subl	b,a	b,x:(r0)		;a=a*2-b=2*a-(b+a)=a-b=e4
+	tfr	y0,a	a,x:(r1)-
+
+	sub	y1,a			y:(r5)+n5,y0
+	add	y0,a			y:(r5)+n5,y0	
+	sub	y0,a			y:(r5)+n5,y0	
+	add	y0,a			(r5)-
+	move		a,x:(r1)	y:(r5)+n5,y0
+
+;-- 3. 9pts idct/butterflies/twiddle factors for odd indices,
+;      and 36pts idct twiddle factors
+	tfr	y0,a	x:(r2)+,x0	y:(r5)+n5,y1
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a			y:(r5)+n5,y0	;;; >>> 0.5
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp0o/2
+	asl	a	x:synth_imfct_p,r0	;!;	;a=tmp0o
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	(r0)+n0		;!;r0=&o0	;b'=tmp0_o/2
+	addl	a,b	n1,n0		;!;		;b=b'*2+a=b+a
+	subl	b,a	#<9-1,n1	;!;	 	;a=a*2-b=2*a-(b+a)=a-b
+	rnd	b	r0,r1		;!;
+	rnd	a	x:(r2)+,x0	b,y1
+	mpyr	x0,y1,b	x:(r2)+,x0	a,y1		;(a+b)*0.501..=o0
+	mpy	x0,y1,a			b,y:(r0)+	;;y:<o0 ;(a-b)*5.736/8
+	asl	a	(r1)+n1		;!;r1=&o7
+	asl	a			y:(r5)+n5,y0	;;; >>> 1
+	asl	a			y:(r5)+n5,y1	;;; >>> 0.5
+	rnd	a	n0,n1		;!;		;*8=o7
+	tfr	y0,a			a,y:(r1)-	;;y:<o7
+
+	mac	x1,y1,a			y:(r5)+n5,y0	;;; >>> -0.5
+	mac	-x1,y0,a		y:(r5)+n5,y0	;;; >>> -1
+	sub	y0,a			y:(r5)+n5,y0	;;; >>> -0.5
+	mac	-x1,y0,a x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp1o/2 >>> 1.73/2
+	asl	a			(r5)+n5		;a=tmp1o  >>> 0
+	mpy	x0,y0,b			y:(r5)+n5,y0	;;; >>> -1.73/2
+	mac	-x0,y0,b		y:(r5)+n5,y0	;;; >>> -1.73/2
+	mac	-x0,y0,b				;b'=tmp1_o/2
+	addl	a,b	x:(r2)+,x0			;b=b'*2+a=b+a
+	subl	b,a	b,y1				;a=a*2-b=2*a-(b+a)=a-b
+	mpyr	x0,y1,b	x:(r2)+,x0	a,y1		;(a+b)*0.517..=o1
+	mpy	x0,y1,a			b,y:(r0)+	;;y:<o1 ;(a-b)*1.931/2
+	asl	a			y:(r5)+n5,y0	;;; >>> 1
+	rnd	a	x:(r2)+,x0	y:(r5)+n5,y1	;*2=o6  >>> -0.34/2
+	tfr	y0,a			a,y:(r1)-	;;y:<o6
+
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0	;;; >>> -1.87/2
+	mac	x0,y0,a			y:(r5)+n5,y0	;;; >>> 0.5
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp2o/2
+	asl	a					;a=tmp2o
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b					;b'=tmp2_o/2
+	addl	a,b	x:(r2)+,x0			;b=b'*2+a=b+a
+	subl	b,a	b,y1				;a=a*2-b=2*a-(b+a)=a-b
+	mpyr	x0,y1,b	x:(r2)+,x0	a,y1		;(a+b)*0.551..=o2
+	mpy	x0,y1,a			b,y:(r0)+	;;y:<o2 ;(a-b)*1.183/2
+	asl	a			y:(r5)+n5,y0	;;; >>> 1
+	rnd	a	x:(r2)+,x0	y:(r5)+n5,y1	;*2=o5  >>> -1.53/2
+	tfr	y0,a			a,y:(r1)-	;;y:<o5
+
+	mac	x0,y1,a	x:(r2)+,x0	y:(r5)+n5,y0	;;; >>> 0.34/2
+	mac	x0,y0,a			y:(r5)+n5,y0	;;; >>> 0.5
+	mac	x1,y0,a	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	y:(r5)+n5,y0	;a'=tmp3o/2
+	asl	a					;a=tmp3o
+	mpy	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:(r2)+,x0	y:(r5)+n5,y0
+	mac	x0,y0,b	x:synth_imfct_p,r4	;!;	;b'=tmp3_o/2
+	addl	a,b	x:(r2)+,x0			;b=b'*2+a=b+a
+	subl	b,a	b,y1				;a=a*2-b=2*a-(b+a)=a-b
+	mpyr	x0,y1,b	x:(r2)+,x0	a,y1		;(a+b)*0.610..=o3
+	mpyr	x0,y1,a			b,y:(r0)	;;y:<o3 ;(a-b)*0.871=o4
+	move				a,y:(r1)-	;;y:<o4
+	move		x:(r2)+,x0	y:(r5)+n5,y0	;compute tmp4o
+	mpy	 x0,y0,a		y:(r5)+n5,y0	;;;
+	mac	-x0,y0,a		y:(r5)+n5,y0	;;;
+	mac	 x0,y0,a		y:(r5)+n5,y0	;;;
+	mac	-x0,y0,a		y:(r5)+n5,y0	;;;
+	movec	m7,m5		;restore linear addressing
+	mac	x0,y0,a	#<18,n5			;!;
+	asl	a	r4,r5			;!;
+	rnd	a	r4,r0			;!;	;a*2=tmp4o
+	move		x:(r2),r2			;imdct_l_tab2_p
+	move		x:(r5)+n5,a	a,y:(r1)	;;y:<o3b
+;			;!; update r5
+;-- 4. 18pts idct
+;	;r4=tmp ;r0=e0 ;r5=o0 ;r2=first coefficient
+	move		 x:(r2)+,x0	y:(r5)+,y0	;x0=-0.250.. | y0=o0
+	mpy	x0,y0,a	 x:(r0)+,x1
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)+,y0
+	do	#8,imdct_l_tmp0_8
+	mpy	x0,y0,a	 x:(r0)+,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)+,y0	;a=tmp[1], tmp[2], ...
+imdct_l_tmp0_8
+	move		 x:(r0)-,x1	y:(r5)-,y0	;update r0, r5
+	move		 		(r5)-
+	move		 		y:(r5)-,y0
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[9]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[10]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[11]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[12]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[13]/2
+	asl	a	 				;a=tmp[13]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[14]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[15]/2
+	asl	a	 				;a=tmp[15]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	macr	x0,x1,a	 x:(r2)+,x0	y:(r5)-,y0	;a=tmp[16]/2
+	asl	a	 #<8,n5		;!;#<8,n5	;a=tmp[16]
+	mpy	-x0,y0,a x:(r0)-,x1	a,y:(r4)+
+	mac	x0,x1,a	 r7,r0		;!;&xr[sb]	;a=tmp[17]/8
+	asl	a	 n7,r1		;!;&win
+	asl	a	 r4,r5
+	asl	a	 				;a=tmp[17]
+	rnd	a	 (r5)-n5	;!;&tmp[9]
+	move		 		a,y:(r4)
+	move		 n6,r4		;!;&prev
+
+;-- 5. shift to imdct and save final result
+;	;r5=&tmp[9] ;r4=&prev[sb] ;r1=&win[blocktype] ;r0=&xr[sb]
+;	;... a.k.a. ...  s[sb][0] ... t_win[type][0]  ... res[sb]
+	move		 x:(r1)+,x0	y:(r5)+,y0
+	move		 		y:(r4)+,a
+	macr	-x0,y0,a 		y:(r4)+,b
+	jclr	#0,n2,imdct_l_even			;even or odd subband?
+	do	#4,imdct_l_odd_final
+	neg	b	 x:(r1)+,x0	y:(r5)+,y0	
+	macr	x0,y0,b	 a,x:(r0)+	y:(r4)+,a
+	move		 x:(r1)+,x0	y:(r5)+,y0
+	macr	-x0,y0,a b,x:(r0)+	y:(r4)+,b
+imdct_l_odd_final
+	move	(r5)-
+	do	#5,imdct_l_odd_final2
+	move		 x:(r1)+,x0	y:(r5)-,y0	
+	macr	x0,y0,b	 a,x:(r0)+	y:(r4)+,a
+	neg	b	 x:(r1)+,x0	y:(r5)-,y0
+	macr	x0,y0,a	 b,x:(r0)+	y:(r4)+,b
+imdct_l_odd_final2
+	jmp	imdct_l_upd_prev
+
+imdct_l_even
+	do	#4,imdct_l_even_final
+	move		 x:(r1)+,x0	y:(r5)+,y0
+	macr	-x0,y0,b a,x:(r0)+	y:(r4)+,a
+	move		 x:(r1)+,x0	y:(r5)+,y0
+	macr	-x0,y0,a b,x:(r0)+	y:(r4)+,b
+imdct_l_even_final
+	move	(r5)-
+	do	#5,imdct_l_even_final2
+	move		 x:(r1)+,x0	y:(r5)-,y0	
+	macr	x0,y0,b	 a,x:(r0)+	y:(r4)+,a
+	move		 x:(r1)+,x0	y:(r5)-,y0
+	macr	x0,y0,a	 b,x:(r0)+	y:(r4)+,b
+imdct_l_even_final2
+
+;-- 6. update 'prev' for next imdct
+imdct_l_upd_prev
+	move	n6,r4
+	do	#9,imdct_l_upd_prev1
+	mpyr	x0,y0,a	x:(r1)+,x0	y:(r5)-,y0
+	move				a,y:(r4)+
+imdct_l_upd_prev1
+	move	(r5)+
+	move	(r5)+
+	move				y:(r5)+,y0
+	do	#9,imdct_l_upd_prev2
+	mpyr	x0,y0,a	x:(r1)+,x0	y:(r5)+,y0
+	move				a,y:(r4)+
+imdct_l_upd_prev2
+	move	r0,r7				;update xr pointer
+	move	r4,n6				;update prev pointer
+	bchg	#0,n2				;toggle subband (even/odd)
+imdct_l_loop0
+
+
+
+;	;n1=lim ;r7=xr(in/out) ;n6=prev ;n2=sb&1
+
+;****** IMDCT for SHORT bands
+	clr	a	n1,x0		;lim
+	move	#<32,a1
+	sub	x0,a	r7,n7		;n7=xr				!! n7
+	jle	imdct_s_loop0		;--> skip  ( because lim>=32 )
+
+	do	a,imdct_s_loop0
+;-- 1. clear the out table
+	clr	a	x:synth_imfct_p,r0
+	move	#<36-6,n0
+	rep	#36
+	move	a,y:(r0)+
+	lua	(r0)-n0,r6		;r6=&out[6]
+	move	#<40-36,n0
+	move	n7,r1			;r1=xr (input)
+	move	#<3,n1
+	lua	(r0)+n0,r5		;r5=&in[0] (align 8!!)
+	movec	#<6-1,m5		;(modulo-6 addressing)
+
+	do	#3,imdct_s_next		;three imdct to do
+;-- 2. input aliasing for 36/18 pts idct
+	move		x:(r1)+n1,a
+	move		x:(r1)+n1,x0	a,y0
+	add	x0,a	x:(r1)+n1,x0	a,y:(r5)+
+	sub	y0,a	x:(r1)+n1,x1	a,y:(r5)+
+	add	x0,a	x0,y1
+	add	y0,a	x:(r1)+n1,x0	a,y:(r5)+
+	add	x1,a	x1,b
+	add	x0,b	x:(r1)+n1,x1	a,y:(r5)+
+	add	y1,b			b,y:(r5)+
+	add	x1,b	#<2,n5
+	move				b,y:(r5)+
+
+	movec	#<6-1,m4		;(modulo-6 addressing)
+	move	r5,r4			;r4=odd adresses...
+	move	#<2,n4
+	move	(r4)+
+	move	#>imdct_s_tab,r2	;r2=imdct coefficients
+	move	#<5,n3			;!;
+	move	r6,r3			;!;
+
+;-- 3. 3pts/6pts idct with twiddle factor for odd indices,
+;      and output butterflies for 2*3 pts = 6 pts idct
+	move				y:(r4)+n4,y0
+	tfr	y0,b	x:(r2)+,x1	y:(r4)+n4,y1	;>>> 0.866
+	mac	x1,y1,b	x:(r2)+,x0	y:(r4)+n4,y0	;>>> 0.5
+	macr	x0,y0,b			y:(r5)+n5,y0
+	tfr	y0,a			y:(r5)+n5,y0
+	mac	x1,y0,a			y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	b,y0		;>>> 0.517
+	mpy	x0,y0,b			y:(r4)+n4,y0
+	add	a,b			(r4)+n4		;>>> 0
+	subl	b,a	r6,r0		;!;&tmp0b
+	rnd	b	(r3)+n3		;!;&tmp5b
+	rnd	a	b,x:(r0)+	;!;y:<tmp0b
+	tfr	y0,b	a,x:(r3)-	;!;y:<tmp5b
+	move				y:(r4)+n4,y0	;>>> -1
+	sub	y0,b			y:(r5)+n5,y0
+	tfr	y0,a			(r5)+n5
+	move				y:(r5)+n5,y0
+	sub	y0,a	x:(r2)+,x0	b,y0		;>>> 0.707
+	mpy	x0,y0,b			y:(r4)+n4,y0
+	add	a,b			y:(r4)+n4,y1	;>>> -0.866
+	subl	b,a	#<18-1,n1
+	rnd	b	#<2,n0		;!;
+	rnd	a	b,x:(r0)+	;!;y:<tmp1b
+	tfr	y0,b	a,x:(r3)	;!;y:<tmp4b
+	mac	-x1,y1,b x:(r2)+,x0	y:(r4)+n4,y0	;>>> 0.5
+	macr	x0,y0,b			y:(r5)+n5,y0
+	tfr	y0,a			y:(r5)+n5,y0
+	mac	-x1,y0,a 		y:(r5)+n5,y0
+	mac	x0,y0,a	x:(r2)+,x0	b,y0		;>>> 1.93/2
+	mpy	x0,y0,b	x:(r3)+,y0	;!;y:<tmp4b
+	addl	a,b	#<5,n4
+	subl	b,a	r6,r4		;x:<out_adr
+	move		r6,r7
+	movec	m7,m4			;(linear addressing)
+	rnd	b	x:(r3)-,y1	;!;y:<tmp5b
+	rnd	a	b,x:(r0)-n0	;!;y:<tmp2b
+	move		x:(r2),r2			;imdct_s_tab2_p
+	move		a,x0		;!;y:<tmp3b
+
+;-- 4. twiddle factors, shift to 12pts imdct and multiply by window type 2
+;	;r4=&out[ss+6]; n4=-2 ;r2=first coefficient
+	move		x:(r2)+,x1	y:(r4)+,a
+	macr	x1,x0,a	x:(r2)+,x1	y:(r4)+,b
+	move				a,y:(r7)+	;;;(r4+n4)
+	macr	x1,y0,b	x:(r2)+,x1	y:(r4)+,y0
+	mpyr	x1,y1,a			b,y:(r7)+	;;;(r4+n4)
+	asl	a	(r1)-n1
+	asl	a	#<3,n1
+	add	y0,a	x:(r2)+,x1	y:(r4)+,y0
+	mpyr	x1,y1,b			a,y:(r7)+	;;;(r4+n4)
+	asl	b	
+	asl	b	x:(r2)+,x1	y:(r4)+,y1
+	add	y0,b	x:(r3),y0			;!;y:<tmp4b
+	mpyr	x1,y0,a			b,y:(r7)+	;;;(r4+n4)
+	asl	a	x:(r2)+,x1	y:(r4)+,b
+	add	y1,a	x:(r0)+,y1			;!;y:<tmp0b
+	macr	x1,x0,b			a,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)+,a
+	move		x:(r0)+,y0			;!;y:<tmp1b
+	move		x:(r0),x0			;!;y:<tmp2b
+	macr	x1,x0,a			b,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)+,b
+	macr	x1,y0,b			a,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)+,a
+	macr	x1,y1,a			b,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)+,b
+	macr	x1,y1,b			a,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)+,a
+	macr	x1,y0,a			b,y:(r7)+	;;;(r4+n4)
+	move		x:(r2)+,x1	y:(r4)-,b
+	macr	x1,x0,b			a,y:(r4)+
+	move				b,y:(r4)-n4
+	move	r4,r6
+imdct_s_next
+
+;-- 5- compute final result for polyphase filter
+	movec	m7,m5			;(linear addressing)
+	move	n7,r0			;r0=x:xr[sb]
+	move	x:synth_imfct_p,r5	;r5=y:out[0]
+	move	n6,r4			;r4=y:prev[sb][0]
+	move				y:(r5)+,y0
+	jclr	#0,n2,imdct_s_even	;even or odd subband?
+	move				y:(r4)+,b
+	add	y0,b			y:(r4)+,a
+	move		b,x:(r0)+	y:(r5)+,y1
+	add	y1,a			y:(r4)+,b
+	neg	a			y:(r5)+,y0
+	do	#8,imdct_s_odd_final
+	add	y0,b	a,x:(r0)+	y:(r4)+,a
+	move		b,x:(r0)+	y:(r5)+,y1
+	add	y1,a			y:(r4)+,b
+	neg	a			y:(r5)+,y0
+imdct_s_odd_final
+	move		a,x:(r0)+	y:(r5)-,y0
+	move	n6,r4
+	do	#18,imdct_s_upd_prev
+	move				y:(r5)+,y0
+	move				y0,y:(r4)+
+imdct_s_upd_prev
+	jmp	imdct_s_even_final
+imdct_s_even
+	move	#<17,n5
+	move				y:(r4),b
+	do	#18,imdct_s_even_final
+	add	y0,b			y:(r5+n5),y0
+	move		b,x:(r0)+	y0,y:(r4)+
+	move				y:(r4),b
+	move				y:(r5)+,y0
+imdct_s_even_final
+	move	r0,n7				;update xr pointer
+	move	r4,n6				;update prev pointer
+	bchg	#0,n2				;toggle subband (even/odd)
+imdct_s_loop0
+
+
+
+
+
+
+
+
+;*****************************************************************************
+;*** synthesis (polyphase filter)
+;*****************************************************************************
+	move	x:outbuf,r1
+	move	r1,x:synth_out_p
+	move	x:xr_p,r0
+	move	#<$02,a			;1<<17 = %00000010.00000000.00000000
+
+synth_loop18_head
+	move	a,x:synth_count18
+	move	r0,x:synth_in_p
+	move	x:synth_imfct_p,n7		;			!! n7
+
+;	** first butterfly pass
+	move	#<18,n0
+	move	n7,r1				;x:synth_imfct_p
+	move	n7,r5
+	move	#$39ED1A,y0			;cos(pi/4) * 1.28/2 = 0.452548339959390415616540391747103
+	ori	#$08,mr				;SCALE UP mode
+	move			x:(r0)+n0,x0
+	do	#8,synth_bfy1
+	mpyr	 x0,y0,a	x:(r0)+n0,x0
+	mpyr	-x0,y0,a	a,x:(r1)+	a,y:(r5)+
+	move			a,x:(r1)+
+	mpyr	 x0,y0,a	x:(r0)+n0,x0
+	mpyr	-x0,y0,a	x:(r0)+n0,x0	a,y:(r5)+
+	mpyr	 x0,y0,a	a,x:(r1)+	a,y:(r5)+
+	mpyr	-x0,y0,a	a,x:(r1)+
+	move			x:(r0)+n0,x0	a,y:(r5)+
+synth_bfy1
+	andi	#$f3,mr				;NO SCALING mode
+
+;	** second butterfly pass
+	clr	b	n7,a			;x:synth_imfct_p
+	move	#<16,b1
+	add	b,a	a,r0
+	add	b,a	a,r4
+	add	b,a	a,r6
+	move		a,r5
+	lua	(r0)+,r7
+	move			x:(r0),b	y:(r4),y0
+	do	#16,synth_bfy2
+	add	y0,b		x:(r4),x1	y:(r0),a
+	sub	x1,a		b,x:(r5)	y:(r0),b
+	add	x1,b		x:(r0),a	a,y:(r5)+
+	sub	y0,a		x:(r0),b	b,y:(r6)
+	sub	x1,b		a,x:(r6)+	y:(r0),a
+	sub	y0,a		b,x:(r4)	y:(r0),b
+	add	y0,b		x:(r0),a	a,y:(r4)+
+	add	x1,a		x:(r7)+,b	b,y:(r0)	;!b
+	move			a,x:(r0)+	y:(r4),y0	;!y0
+synth_bfy2
+
+	ori	#$08,mr				;SCALE UP mode
+;this nice feature allows us to automatically scale up the samples during
+;the next processing steps, so we can save the ASL's in the final loop which
+;writes PCM samples to the output buffer (we need to shift left by 6 bits)
+
+
+;	** perform the rest of the butterfly passes
+	move	x:synth_tab_rsincosx_p,n6	;x:synth_tab_rsincosx_p	!! n6
+	move	n7,r0				;x:synth_imfct_p
+	movec	#<64-1,m0			;modulo-64 addressing
+	movec	#<64-1,m4			;modulo-64 addressing
+
+;	** pass 3  - SCALE UP (1/6)
+	move	n6,r6				;x:synth_tab_rsincosx_p
+	move	#<8,n0
+	move	#<8,n4
+	move	r0,r4
+	do	#4,synth_grp3
+	lua	(r0)+n0,r5
+	move	r5,r2
+	move			x:(r6),x0
+	move			x:(r0),b	y:(r5),y1
+	mac	-x0,y1,b	x:(r2)+,x1	y:(r6)+,y0
+	do	#8,synth_bfy3
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+,b
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1
+	macr	x0,x1,b				y:(r0),a
+	subl	b,a		x:(r4),b	b,y:(r0)+
+	mac	-x0,y1,b	x:(r2)+,x1	a,y:(r5)+
+synth_bfy3
+	move			x:(r0)+n0,x0	y:(r4)+n4,y0	;update r0, r4
+synth_grp3
+
+	movec	#<64-1,m2			;modulo-64 addressing
+	movec	#<64-1,m5			;modulo-64 addressing
+
+;	** pass 4  - SCALE UP (2/6)
+	move	n6,r6				;x:synth_tab_rsincosx_p
+	move	#<4+0,n0
+	move	#<4+1,n2
+	move	#<4+1,n4
+	move	#<4+1,n5
+	lua	(r0)+n0,r5
+	move	r5,r2
+	move			x:(r6),x0
+	move			x:(r0),b	y:(r5),y1
+	do	#8,synth_grp4
+	mac	-x0,y1,b	x:(r2)+,x1	y:(r6)+,y0
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+,b
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1
+	macr	x0,x1,b				y:(r0),a
+	subl	b,a		x:(r4),b	b,y:(r0)+
+	mac	-x0,y1,b	x:(r2)+,x1	a,y:(r5)+
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+,b
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1
+	macr	x0,x1,b				y:(r0),a
+	subl	b,a		x:(r4),b	b,y:(r0)+
+	mac	-x0,y1,b	x:(r2)+,x1	a,y:(r5)+
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+,b
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1
+	macr	x0,x1,b				y:(r0),a
+	subl	b,a		x:(r4),b	b,y:(r0)+
+	mac	-x0,y1,b	x:(r2)+n2,x1	a,y:(r5)+	;update r2
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+n4,b	;update r4
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1	;!y1
+	macr	x0,x1,b		x:(r6),x0	y:(r0),a	;!x0
+	subl	b,a		x:(r4),b	b,y:(r0)+	;!b
+	move			x:(r0)+n0,a	a,y:(r5)+n5	;update r0, r5
+synth_grp4
+
+;	** pass 5  - SCALE UP (3/6)
+	move	n6,r6				;x:synth_tab_rsincosx_p
+	move	#<2+0,n0
+	move	#<2+1,n2
+	move	#<2+1,n4
+	move	#<2+1,n5
+	lua	(r0)+n0,r5
+	move	r5,r2
+	move			x:(r6),x0
+	move			x:(r0),b	y:(r5),y1
+	do	#16,synth_grp5
+	mac	-x0,y1,b	x:(r2)+,x1	y:(r6)+,y0
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+,b
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1
+	macr	x0,x1,b				y:(r0),a
+	subl	b,a		x:(r4),b	b,y:(r0)+
+	mac	-x0,y1,b	x:(r2)+n2,x1	a,y:(r5)+	;update r2
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+n4,b	;update r4
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1	;!y1
+	macr	x0,x1,b		x:(r6),x0	y:(r0),a	;!x0
+	subl	b,a		x:(r4),b	b,y:(r0)+	;!b
+	move			x:(r0)+n0,a	a,y:(r5)+n5	;update r0, r5
+synth_grp5
+
+;	** pass 6  - SCALE UP (4/6)
+	move	n6,r6				;x:synth_tab_rsincosx_p
+	move	#<1+1,n2
+	move	#<1+1,n4
+	move	#<1+1,n5
+	lua	(r0)+,r5
+	move	r5,r2
+	move			x:(r6),x0
+	move			x:(r0),b	y:(r5),y1
+	do	#32,synth_grp6
+	mac	-x0,y1,b	x:(r2)+n2,x1	y:(r6)+,y0	;update r2
+	macr	y0,x1,b		x:(r0),a
+	subl	b,a		b,x:(r0)	y:(r4)+n4,b	;update r4
+	mac	y0,y1,b		a,x:(r5)	y:(r2),y1	;!y1
+	macr	x0,x1,b		x:(r6),x0	y:(r0),a	;!x0
+	subl	b,a		x:(r4),b	b,y:(r0)+	;!b
+	move			x:(r0)+,a	a,y:(r5)+n5	;update r0, r5
+synth_grp6
+
+	movec	m7,m2				;linear addressing
+	movec	m7,m4				;linear addressing
+	movec	m7,m5				;linear addressing
+
+;	** unscrambling and final adjustments  - SCALE UP (5/6)
+	move	x:synth_audio_pp,r5
+	move	#>synth_tab_cosx,r4
+	move	#>synth_tab_sinx,r6
+	move	x:(r5),r5
+	movec	#<0,m0				;bit-reverse addressing
+	move	#<32,n0
+	move			x:(r0),x1	y:(r4)+,y1
+	mpy	y1,x1,a				y:(r6)+,y0
+	move					y:(r0)+n0,y1
+	macr	-y0,y1,a	x:(r0),x1	y:(r4)+,y1
+	move					y:(r6)+,y0
+synth_unscramble_start
+;------	move	#synth_unscramble,r7
+;------	jmp	<synth_unscramble_start
+	do	#64-1,synth_unscramble
+	mpy	y1,x1,a		a,x:(r5)+	y:(r0)+n0,y1
+	macr	-y0,y1,a	x:(r0),x1	y:(r4)+,y1
+	move					y:(r6)+,y0
+synth_unscramble
+;------	5+1 words, return: jmp (r7)
+	move			a,x:(r5)+
+
+;	** window audio data - output PCM samples  - SCALE UP (6/6)
+	move	x:synth_out_p,r6
+	move	x:channel_counter,b
+	move	x:channels,x0
+	sub	x0,b	n7,r5			;x:synth_imfct_p
+	teq	b,a	r6,r5			;outbuf (x:-mem, left ch.)
+
+	move	x:synth_audio_pp,r0
+	movec	#1024-1,m0			;modulo addressing
+	movec	m0,m1				;modulo addressing
+	move	x:(r0),r0
+	move	#<96,n0
+	move	#>synth_tab_window,r4
+	lua	(r0)+n0,r1
+	move	x:synth_window_p,r3
+	move	#<128,n0
+	move	#<128,n1
+	jsr	(r3)				;write to left channel (or tmp)
+
+	andi	#$f3,mr				;NO SCALING mode
+
+	tst	b	n7,r3			;x:synth_imfct_p
+	jeq	synth_out_done
+	move	r6,r5				;outbuf (y:-mem, right ch.)
+	move	x:(r3)+,a
+	rep	#32				;(copy from tmp)
+	move	x:(r3)+,a	a,y:(r5)+	;write to right channel
+synth_out_done
+	move	r5,x:synth_out_p
+
+;	** update audio buffer pointer
+	move	x:synth_audio_pp,r1
+	move	#<64,n0
+	move	x:(r1),r0
+	movec	m7,m1				;linear addressing
+	move	(r0)-n0
+	movec	m7,m0				;linear addressing
+	move	r0,x:(r1)
+
+;	** loop 18 times
+	move	x:synth_in_p,r0
+	move	x:synth_count18,a
+	lsr	a	(r0)+
+	jne	synth_loop18_head
+
+
+
+	move	x:si_tab_p,r0
+	move	#>xr1,r1
+	move	#>hybrid_prev1,r2
+	move	#>synth_audio_r_p,r3
+	clr	b	y:forcemono,x0
+	cmp	x0,b	x:channel_counter,a
+	tne	b,a
+	lsr	a	(r0)+
+	jne	hybrid_synth_channel_loop	;next channel
+
+;****** for(ch=0;ch<stereo;ch++)	;end************************
+
+
+	move	x:outbuf,r1
+	move	#576,n1
+	move	#>si_tab+2,r0
+	move	#>granule1_sfsi,n0
+	move	(r1)+n1
+	move	x:granule_counter,a
+	tst	a	#<1,a
+	jeq	decode_granule_loop	;decode second granule
+
+;****** for(gr=0;gr<ngr;gr++)		;end************************
+
+
+
+
+;	do	#500,overload0
+;	do	#1000,overload1
+;	nop
+;overload1
+;	nop
+;overload0
+
+	move	#<0,x0
+	move	x0,y:busy		;clear BUSY
+	rts				;it's done.
+
+
+
+
+
+
+
+
+
+
+synth_window_start
+	do	#32,synth_window
+	move			x:(r0)+n0,x0	y:(r4)+,y0
+	mpy	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r0)+n0,x0	y:(r4)+,y0
+	mac	x0,y0,a		x:(r1)+n1,x0	y:(r4)+,y0
+	macr	x0,y0,a		(r0)+
+	move			a,x:(r5)+	y:(r1)+,a	;update r1
+synth_window
+	rts
+synth_window_end
+;		** 21 words
+
+
+getbits_init
+	clr	b	r7,x:getbits_stream
+	move	b,x:getbits_count
+	move	#<$80,b			;end marker
+	move	b,x:getbits_temp
+getbits_continue
+	move	x:getbits_p,r5		;getbits(n7) -> jsr (r5)
+	clr	b	x:getbit1_p,r6	;getbit1()   -> jsr (r6)
+	move	x:getbits_stream,r7	;!! DO NOT TOUCH !!
+	move	x:getbits_temp,b1	;!! DO NOT TOUCH !!
+	move	x:getbits_count,b0	;!! DO NOT TOUCH !!
+	rts
+
+getbits_pause
+	move	r7,x:getbits_stream
+	move	b1,x:getbits_temp
+	move	b0,x:getbits_count
+	rts
+
+getbits__
+	do	n7,getbits_loop		;n7=number_of_bits
+	inc	b			;b0=b0+1  (increment bit counter)
+	lsl	b			;b1=b1<<1 (new CARRY bit)
+	jne	getbits_ne
+	move	x:(r7)+,b1		;fetch next 24 bits
+	rol	b			;b1=b1<<1, append end marker
+getbits_ne
+	rol	a			;get CARRY bit, set condition code ZERO
+getbits_loop
+	rts
+
+getbit1__
+	inc	b			;b0=b0+1  (increment bit counter)
+	lsl	b	#<0,a		;b1=b1<<1 (new CARRY bit)
+	jne	getbit1_ne
+	move	x:(r7)+,b1		;fetch next 24 bits
+	rol	b			;b1=b1<<1, append end marker
+getbit1_ne
+	rol	a			;get CARRY bit, set condition code ZERO
+	rts
+
+
+
+
+
+
+
+
+
+
+
+
+;*****************************************************************************
+;*** initialize
+;*****************************************************************************
+; parameters
+;  x1 - mem_mp3 (64+32+30=126 words in INTERNAL L-memory)
+;  x0 - mem_mp3p (21+6=27 words in INTERNAL P-memory)
+;  y1 - freq_idx (0, 1 or 2 - extracted from frame header)
+;  y0 - /
+init
+	clr	b
+
+;********* hybrid filter + synthesis: fast L-data buffer
+;********* (64 words - major speedup!!)
+	tfr	x1,a		#<64,b1
+	tst	a		#>synth_tab_rsinxrcosx,r0
+	jeq	init_no_lmem
+	add	b,a		a,x:synth_imfct_p
+
+;********* synthesis: rsinx_rcosx table to fast L-data memory
+;********* (32 words - little speedup)
+	move	a,x:synth_tab_rsincosx_p
+	move	a,r4
+	move	x:(r0),a
+	do	#32,init_loop_l0
+	move	a,x:(r4)	y:(r0)+,a
+	move	x:(r0),a	a,y:(r4)+
+init_loop_l0
+
+;********* hybrid filter: imdct_l_tab2 to fast X-data memory
+;********* (18 words - tiny speedup)
+	move	#>imdct_l_tab2_p,r0
+	move	r4,r1			;r1=32 words fast Y-mem pointer
+	move	r4,x:(r0)+
+	move	#>imdct_s_tab2_p,r2	;next...
+	do	#18,init_loop_l1
+	move	x:(r0)+,a
+	move	a,x:(r4)+
+init_loop_l1
+
+;********* hybrid filter: imdct_s_tab2 to fast X-data memory
+;********* (12 words - tiny speedup)
+	move	r4,x:(r2)+
+	move	#>cs_ca_tab_p,r0	;next...
+	do	#12,init_loop_l2
+	move	x:(r2)+,a
+	move	a,x:(r4)+
+init_loop_l2
+
+;********* hybrid filter: cs_ca_tab to fast Y-data memory
+;********* (16 words - tiny speedup)
+	move	x:(r0),r2
+	move	r1,x:(r0)
+	do	#16,init_loop_l3	;14 words Y-mem remain unused...
+	move	y:(r2)+,a
+	move	a,y:(r1)+
+init_loop_l3
+
+
+
+init_no_lmem
+	tfr	x0,a		#synth_window_start,r0
+	tst	a		x0,r1
+	jeq	init_no_pmem
+
+;********* synthesis: window loop to fast program memory
+;********* (21 words - major speedup!!)
+	move	x0,x:synth_window_p
+	lua	(r1)+,r2
+	do	#synth_window_end-synth_window_start,init_loop_p0
+	movem	p:(r0)+,x1
+	movem	x1,p:(r1)+
+init_loop_p0
+	tfr	x0,a		#>synth_window-synth_window_start-1,x0
+	add	x0,a		#>synth_unscramble_start,r0
+	movem	a,p:(r2)
+
+;********* synthesis: unscramble loop to fast program memory
+;********* (6 words - tiny speedup)
+	move	r1,a
+	tfr	a,b		r0,r2
+	movem	p:(r0)+,x1
+	movem	x1,p:(r1)+		;copy first word of 'do'
+	move	#>synth_unscramble-synth_unscramble_start-1,x0
+	add	x0,a		(r0)+
+	movem	a,p:(r1)+		;second word of 'do' (absolute address)
+	do	#synth_unscramble-synth_unscramble_start-2,init_loop_p1
+	movem	p:(r0)+,x1
+	movem	x1,p:(r1)+		;copy the rest
+init_loop_p1
+	move	#>synth_unscramble_help,r3
+	move	#>$0c0000,y0		;short jump 'jmp xxx'
+	movem	p:(r3)+,x1
+	movem	x1,p:(r1)+		;copy 'jmp (r7)'
+	movem	p:(r3)+,x1
+	movem	x1,p:(r2)+
+	movem	p:(r3),x1
+	movem	x1,p:(r2)+		;copy 'move #synth_unscramble,r7'
+	or	y0,b
+	movem	b,p:(r2)		;short jump 'jmp <synth_unscramble_start'
+
+
+
+
+
+init_no_pmem
+;****** select scalefactor_band tables (using freq_idx)
+	move	y1,n0			;freq_idx
+	move	#>sfbands_tab,r0
+	nop
+	move	x:(r0+n0),a
+	move	#>sfbandl_tab,r0
+	move	a,x:sfbands_p
+	move	a,r1
+	move	x:(r0+n0),a
+	move	a,x:sfbandl_p
+
+	move	#<0,x0
+	rts
+
+
+
+synth_unscramble_help
+	jmp	(r7)
+	move	#synth_unscramble,r7
+
+
+
+
+
+
+
+
+
+
+
+
+	org	x:
+	align	1024
+synth_audio
+	ds	2048
+
+;->xdata+2048
+inbuf
+	ds	662	;(33+512+1440)/3
+
+
+
+;	dc	"***xr0***"
+xr0		ds	576
+;	dc	"***xr1***"
+		dc	1,1,1	;safety (for INTENSITY STEREO)
+xr1		ds	576
+;	dc	"***xr.***"
+xr_p		ds	1
+xr_zero_p	ds	1
+
+
+;	dc	"***getbit***"
+getbits_p		dc	getbits__
+getbit1_p		dc	getbit1__
+getbits_stream		ds	1
+getbits_temp		ds	1
+getbits_count		ds	1
+
+mono			ds	1
+channels		ds	1
+modext			ds	1
+
+;	dc	"************  is  ************"
+x_is_nonzero		dc	0
+
+
+sfsi_p		ds	1
+granule0_sfsi	ds	4*2	;always zero
+;	dc	"***sfsi01***"
+granule1_sfsi	ds	4*2	;4 values for each channel
+
+si_granule_tab_p	ds	1
+si_tab_p		ds	1
+si_tab		dc	si0,si1,si2,si3
+
+;	dc	"***si0***"
+si0
+grstart		ds	1
+grend		ds	1
+regionend2	ds	1
+globalgain	ds	1
+sfcompress	ds	1
+blocktype	ds	1
+mixedblock	ds	1
+tabsel0		ds	1
+tabsel1		ds	1
+tabsel2		ds	1
+subblockgain0	ds	1
+subblockgain1	ds	1
+subblockgain2	ds	1
+regionend0	ds	1
+regionend1	ds	1
+preflag		ds	1
+sfshift		ds	1
+tabsel3		ds	1
+;	dc	"***si1***"
+si1		ds	18
+;	dc	"***si2***"
+si2		ds	18
+;	dc	"***si3***"
+si3		ds	18
+;	dc	"***si.***"
+
+granule_counter	ds	1
+channel_counter	ds	1
+
+outbuf		ds	1
+
+scalefac_p	ds	1
+;	dc	"***sf0***"
+scalefac0	ds	39
+;	dc	"***sf1***"
+scalefac1	ds	39
+;	dc	"***sf.***"
+
+
+prev_p		ds	1
+
+synth_in_p		ds	1
+synth_out_p		ds	1
+;	dc	"**synth**"
+synth_audio_l_p		dc	synth_audio
+synth_audio_r_p		dc	synth_audio+1024
+synth_audio_pp		ds	1
+synth_count18		ds	1
+
+synth_imfct_p		dc	synth_imfct_slow
+synth_window_p		dc	synth_window_start
+synth_tab_rsincosx_p	dc	synth_tab_rsinxrcosx
+
+
+
+htab00
+htab04
+htab14
+ dc    0
+htab01
+ dc   -5,  -3,  -1,  17,   1,  16,   0
+htab02
+ dc  -15, -11,  -9,  -5,  -3,  -1,  34,   2,  18,  -1,  33,  32,  17,  -1,   1
+ dc   16,   0
+htab03
+ dc  -13, -11,  -9,  -5,  -3,  -1,  34,   2,  18,  -1,  33,  32,  16,  17,  -1
+ dc    1,   0
+htab05
+ dc  -29, -25, -23, -15,  -7,  -5,  -3,  -1,  51,  35,  50,  49,  -3,  -1,  19
+ dc    3,  -1,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  17,  -1,   1,  16
+ dc    0
+htab06
+ dc  -25, -19, -13,  -9,  -5,  -3,  -1,  51,   3,  35,  -1,  50,  48,  -1,  19
+ dc   49,  -3,  -1,  34,   2,  18,  -3,  -1,  33,  32,   1,  -1,  17,  -1,  16
+ dc    0
+htab07
+ dc  -69, -65, -57, -39, -29, -17, -11,  -7,  -3,  -1,  85,  69,  -1,  84,  83
+ dc   -1,  53,  68,  -3,  -1,  37,  82,  21,  -5,  -1,  81,  -1,   5,  52,  -1
+ dc   80,  -1,  67,  51,  -5,  -3,  -1,  36,  66,  20,  -1,  65,  64, -11,  -7
+ dc   -3,  -1,   4,  35,  -1,  50,   3,  -1,  19,  49,  -3,  -1,  48,  34,  18
+ dc   -5,  -1,  33,  -1,   2,  32,  17,  -1,   1,  16,   0
+htab08
+ dc  -65, -63, -59, -45, -31, -19, -13,  -7,  -5,  -3,  -1,  85,  84,  69,  83
+ dc   -3,  -1,  53,  68,  37,  -3,  -1,  82,   5,  21,  -5,  -1,  81,  -1,  52
+ dc   67,  -3,  -1,  80,  51,  36,  -5,  -3,  -1,  66,  20,  65,  -3,  -1,   4
+ dc   64,  -1,  35,  50,  -9,  -7,  -3,  -1,  19,  49,  -1,   3,  48,  34,  -1
+ dc    2,  32,  -1,  18,  33,  17,  -3,  -1,   1,  16,   0
+htab09
+ dc  -63, -53, -41, -29, -19, -11,  -5,  -3,  -1,  85,  69,  53,  -1,  83,  -1
+ dc   84,   5,  -3,  -1,  68,  37,  -1,  82,  21,  -3,  -1,  81,  52,  -1,  67
+ dc   -1,  80,   4,  -7,  -3,  -1,  36,  66,  -1,  51,  64,  -1,  20,  65,  -5
+ dc   -3,  -1,  35,  50,  19,  -1,  49,  -1,   3,  48,  -5,  -3,  -1,  34,   2
+ dc   18,  -1,  33,  32,  -3,  -1,  17,   1,  -1,  16,   0
+htab10
+ dc -125,-121,-111, -83, -55, -35, -21, -13,  -7,  -3,  -1, 119, 103,  -1, 118
+ dc   87,  -3,  -1, 117, 102,  71,  -3,  -1, 116,  86,  -1, 101,  55,  -9,  -3
+ dc   -1, 115,  70,  -3,  -1,  85,  84,  99,  -1,  39, 114, -11,  -5,  -3,  -1
+ dc  100,   7, 112,  -1,  98,  -1,  69,  53,  -5,  -1,   6,  -1,  83,  68,  23
+ dc  -17,  -5,  -1, 113,  -1,  54,  38,  -5,  -3,  -1,  37,  82,  21,  -1,  81
+ dc   -1,  52,  67,  -3,  -1,  22,  97,  -1,  96,  -1,   5,  80, -19, -11,  -7
+ dc   -3,  -1,  36,  66,  -1,  51,   4,  -1,  20,  65,  -3,  -1,  64,  35,  -1
+ dc   50,   3,  -3,  -1,  19,  49,  -1,  48,  34,  -7,  -3,  -1,  18,  33,  -1
+ dc    2,  32,  17,  -1,   1,  16,   0
+htab11
+ dc -121,-113, -89, -59, -43, -27, -17,  -7,  -3,  -1, 119, 103,  -1, 118, 117
+ dc   -3,  -1, 102,  71,  -1, 116,  -1,  87,  85,  -5,  -3,  -1,  86, 101,  55
+ dc   -1, 115,  70,  -9,  -7,  -3,  -1,  69,  84,  -1,  53,  83,  39,  -1, 114
+ dc   -1, 100,   7,  -5,  -1, 113,  -1,  23, 112,  -3,  -1,  54,  99,  -1,  96
+ dc   -1,  68,  37, -13,  -7,  -5,  -3,  -1,  82,   5,  21,  98,  -3,  -1,  38
+ dc    6,  22,  -5,  -1,  97,  -1,  81,  52,  -5,  -1,  80,  -1,  67,  51,  -1
+ dc   36,  66, -15, -11,  -7,  -3,  -1,  20,  65,  -1,   4,  64,  -1,  35,  50
+ dc   -1,  19,  49,  -5,  -3,  -1,   3,  48,  34,  33,  -5,  -1,  18,  -1,   2
+ dc   32,  17,  -3,  -1,   1,  16,   0
+htab12
+ dc -115, -99, -73, -45, -27, -17,  -9,  -5,  -3,  -1, 119, 103, 118,  -1,  87
+ dc  117,  -3,  -1, 102,  71,  -1, 116, 101,  -3,  -1,  86,  55,  -3,  -1, 115
+ dc   85,  39,  -7,  -3,  -1, 114,  70,  -1, 100,  23,  -5,  -1, 113,  -1,   7
+ dc  112,  -1,  54,  99, -13,  -9,  -3,  -1,  69,  84,  -1,  68,  -1,   6,   5
+ dc   -1,  38,  98,  -5,  -1,  97,  -1,  22,  96,  -3,  -1,  53,  83,  -1,  37
+ dc   82, -17,  -7,  -3,  -1,  21,  81,  -1,  52,  67,  -5,  -3,  -1,  80,   4
+ dc   36,  -1,  66,  20,  -3,  -1,  51,  65,  -1,  35,  50, -11,  -7,  -5,  -3
+ dc   -1,  64,   3,  48,  19,  -1,  49,  34,  -1,  18,  33,  -7,  -5,  -3,  -1
+ dc    2,  32,   0,  17,  -1,   1,  16,   0
+htab13
+ dc -509,-503,-475,-405,-333,-265,-205,-153,-115, -83, -53, -35, -21, -13,  -9
+ dc   -7,  -5,  -3,  -1, 254, 252, 253, 237, 255,  -1, 239, 223,  -3,  -1, 238
+ dc  207,  -1, 222, 191,  -9,  -3,  -1, 251, 206,  -1, 220,  -1, 175, 233,  -1
+ dc  236, 221,  -9,  -5,  -3,  -1, 250, 205, 190,  -1, 235, 159,  -3,  -1, 249
+ dc  234,  -1, 189, 219, -17,  -9,  -3,  -1, 143, 248,  -1, 204,  -1, 174, 158
+ dc   -5,  -1, 142,  -1, 127, 126, 247,  -5,  -1, 218,  -1, 173, 188,  -3,  -1
+ dc  203, 246, 111, -15,  -7,  -3,  -1, 232,  95,  -1, 157, 217,  -3,  -1, 245
+ dc  231,  -1, 172, 187,  -9,  -3,  -1,  79, 244,  -3,  -1, 202, 230, 243,  -1
+ dc   63,  -1, 141, 216, -21,  -9,  -3,  -1,  47, 242,  -3,  -1, 110, 156,  15
+ dc   -5,  -3,  -1, 201,  94, 171,  -3,  -1, 125, 215,  78, -11,  -5,  -3,  -1
+ dc  200, 214,  62,  -1, 185,  -1, 155, 170,  -1,  31, 241, -23, -13,  -5,  -1
+ dc  240,  -1, 186, 229,  -3,  -1, 228, 140,  -1, 109, 227,  -5,  -1, 226,  -1
+ dc   46,  14,  -1,  30, 225, -15,  -7,  -3,  -1, 224,  93,  -1, 213, 124,  -3
+ dc   -1, 199,  77,  -1, 139, 184,  -7,  -3,  -1, 212, 154,  -1, 169, 108,  -1
+ dc  198,  61, -37, -21,  -9,  -5,  -3,  -1, 211, 123,  45,  -1, 210,  29,  -5
+ dc   -1, 183,  -1,  92, 197,  -3,  -1, 153, 122, 195,  -7,  -5,  -3,  -1, 167
+ dc  151,  75, 209,  -3,  -1,  13, 208,  -1, 138, 168, -11,  -7,  -3,  -1,  76
+ dc  196,  -1, 107, 182,  -1,  60,  44,  -3,  -1, 194,  91,  -3,  -1, 181, 137
+ dc   28, -43, -23, -11,  -5,  -1, 193,  -1, 152,  12,  -1, 192,  -1, 180, 106
+ dc   -5,  -3,  -1, 166, 121,  59,  -1, 179,  -1, 136,  90, -11,  -5,  -1,  43
+ dc   -1, 165, 105,  -1, 164,  -1, 120, 135,  -5,  -1, 148,  -1, 119, 118, 178
+ dc  -11,  -3,  -1,  27, 177,  -3,  -1,  11, 176,  -1, 150,  74,  -7,  -3,  -1
+ dc   58, 163,  -1,  89, 149,  -1,  42, 162, -47, -23,  -9,  -3,  -1,  26, 161
+ dc   -3,  -1,  10, 104, 160,  -5,  -3,  -1, 134,  73, 147,  -3,  -1,  57,  88
+ dc   -1, 133, 103,  -9,  -3,  -1,  41, 146,  -3,  -1,  87, 117,  56,  -5,  -1
+ dc  131,  -1, 102,  71,  -3,  -1, 116,  86,  -1, 101, 115, -11,  -3,  -1,  25
+ dc  145,  -3,  -1,   9, 144,  -1,  72, 132,  -7,  -5,  -1, 114,  -1,  70, 100
+ dc   40,  -1, 130,  24, -41, -27, -11,  -5,  -3,  -1,  55,  39,  23,  -1, 113
+ dc   -1,  85,   7,  -7,  -3,  -1, 112,  54,  -1,  99,  69,  -3,  -1,  84,  38
+ dc   -1,  98,  53,  -5,  -1, 129,  -1,   8, 128,  -3,  -1,  22,  97,  -1,   6
+ dc   96, -13,  -9,  -5,  -3,  -1,  83,  68,  37,  -1,  82,   5,  -1,  21,  81
+ dc   -7,  -3,  -1,  52,  67,  -1,  80,  36,  -3,  -1,  66,  51,  20, -19, -11
+ dc   -5,  -1,  65,  -1,   4,  64,  -3,  -1,  35,  50,  19,  -3,  -1,  49,   3
+ dc   -1,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  -3,  -1,  17,   1,  16
+ dc    0
+htab15
+ dc -495,-445,-355,-263,-183,-115, -77, -43, -27, -13,  -7,  -3,  -1, 255, 239
+ dc   -1, 254, 223,  -1, 238,  -1, 253, 207,  -7,  -3,  -1, 252, 222,  -1, 237
+ dc  191,  -1, 251,  -1, 206, 236,  -7,  -3,  -1, 221, 175,  -1, 250, 190,  -3
+ dc   -1, 235, 205,  -1, 220, 159, -15,  -7,  -3,  -1, 249, 234,  -1, 189, 219
+ dc   -3,  -1, 143, 248,  -1, 204, 158,  -7,  -3,  -1, 233, 127,  -1, 247, 173
+ dc   -3,  -1, 218, 188,  -1, 111,  -1, 174,  15, -19, -11,  -3,  -1, 203, 246
+ dc   -3,  -1, 142, 232,  -1,  95, 157,  -3,  -1, 245, 126,  -1, 231, 172,  -9
+ dc   -3,  -1, 202, 187,  -3,  -1, 217, 141,  79,  -3,  -1, 244,  63,  -1, 243
+ dc  216, -33, -17,  -9,  -3,  -1, 230,  47,  -1, 242,  -1, 110, 240,  -3,  -1
+ dc   31, 241,  -1, 156, 201,  -7,  -3,  -1,  94, 171,  -1, 186, 229,  -3,  -1
+ dc  125, 215,  -1,  78, 228, -15,  -7,  -3,  -1, 140, 200,  -1,  62, 109,  -3
+ dc   -1, 214, 227,  -1, 155, 185,  -7,  -3,  -1,  46, 170,  -1, 226,  30,  -5
+ dc   -1, 225,  -1,  14, 224,  -1,  93, 213, -45, -25, -13,  -7,  -3,  -1, 124
+ dc  199,  -1,  77, 139,  -1, 212,  -1, 184, 154,  -7,  -3,  -1, 169, 108,  -1
+ dc  198,  61,  -1, 211, 210,  -9,  -5,  -3,  -1,  45,  13,  29,  -1, 123, 183
+ dc   -5,  -1, 209,  -1,  92, 208,  -1, 197, 138, -17,  -7,  -3,  -1, 168,  76
+ dc   -1, 196, 107,  -5,  -1, 182,  -1, 153,  12,  -1,  60, 195,  -9,  -3,  -1
+ dc  122, 167,  -1, 166,  -1, 192,  11,  -1, 194,  -1,  44,  91, -55, -29, -15
+ dc   -7,  -3,  -1, 181,  28,  -1, 137, 152,  -3,  -1, 193,  75,  -1, 180, 106
+ dc   -5,  -3,  -1,  59, 121, 179,  -3,  -1, 151, 136,  -1,  43,  90, -11,  -5
+ dc   -1, 178,  -1, 165,  27,  -1, 177,  -1, 176, 105,  -7,  -3,  -1, 150,  74
+ dc   -1, 164, 120,  -3,  -1, 135,  58, 163, -17,  -7,  -3,  -1,  89, 149,  -1
+ dc   42, 162,  -3,  -1,  26, 161,  -3,  -1,  10, 160, 104,  -7,  -3,  -1, 134
+ dc   73,  -1, 148,  57,  -5,  -1, 147,  -1, 119,   9,  -1,  88, 133, -53, -29
+ dc  -13,  -7,  -3,  -1,  41, 103,  -1, 118, 146,  -1, 145,  -1,  25, 144,  -7
+ dc   -3,  -1,  72, 132,  -1,  87, 117,  -3,  -1,  56, 131,  -1, 102,  71,  -7
+ dc   -3,  -1,  40, 130,  -1,  24, 129,  -7,  -3,  -1, 116,   8,  -1, 128,  86
+ dc   -3,  -1, 101,  55,  -1, 115,  70, -17,  -7,  -3,  -1,  39, 114,  -1, 100
+ dc   23,  -3,  -1,  85, 113,  -3,  -1,   7, 112,  54,  -7,  -3,  -1,  99,  69
+ dc   -1,  84,  38,  -3,  -1,  98,  22,  -3,  -1,   6,  96,  53, -33, -19,  -9
+ dc   -5,  -1,  97,  -1,  83,  68,  -1,  37,  82,  -3,  -1,  21,  81,  -3,  -1
+ dc    5,  80,  52,  -7,  -3,  -1,  67,  36,  -1,  66,  51,  -1,  65,  -1,  20
+ dc    4,  -9,  -3,  -1,  35,  50,  -3,  -1,  64,   3,  19,  -3,  -1,  49,  48
+ dc   34,  -9,  -7,  -3,  -1,  18,  33,  -1,   2,  32,  17,  -3,  -1,   1,  16
+ dc    0
+htab16
+ dc -509,-503,-461,-323,-103, -37, -27, -15,  -7,  -3,  -1, 239, 254,  -1, 223
+ dc  253,  -3,  -1, 207, 252,  -1, 191, 251,  -5,  -1, 175,  -1, 250, 159,  -3
+ dc   -1, 249, 248, 143,  -7,  -3,  -1, 127, 247,  -1, 111, 246, 255,  -9,  -5
+ dc   -3,  -1,  95, 245,  79,  -1, 244, 243, -53,  -1, 240,  -1,  63, -29, -19
+ dc  -13,  -7,  -5,  -1, 206,  -1, 236, 221, 222,  -1, 233,  -1, 234, 217,  -1
+ dc  238,  -1, 237, 235,  -3,  -1, 190, 205,  -3,  -1, 220, 219, 174, -11,  -5
+ dc   -1, 204,  -1, 173, 218,  -3,  -1, 126, 172, 202,  -5,  -3,  -1, 201, 125
+ dc   94, 189, 242, -93,  -5,  -3,  -1,  47,  15,  31,  -1, 241, -49, -25, -13
+ dc   -5,  -1, 158,  -1, 188, 203,  -3,  -1, 142, 232,  -1, 157, 231,  -7,  -3
+ dc   -1, 187, 141,  -1, 216, 110,  -1, 230, 156, -13,  -7,  -3,  -1, 171, 186
+ dc   -1, 229, 215,  -1,  78,  -1, 228, 140,  -3,  -1, 200,  62,  -1, 109,  -1
+ dc  214, 155, -19, -11,  -5,  -3,  -1, 185, 170, 225,  -1, 212,  -1, 184, 169
+ dc   -5,  -1, 123,  -1, 183, 208, 227,  -7,  -3,  -1,  14, 224,  -1,  93, 213
+ dc   -3,  -1, 124, 199,  -1,  77, 139, -75, -45, -27, -13,  -7,  -3,  -1, 154
+ dc  108,  -1, 198,  61,  -3,  -1,  92, 197,  13,  -7,  -3,  -1, 138, 168,  -1
+ dc  153,  76,  -3,  -1, 182, 122,  60, -11,  -5,  -3,  -1,  91, 137,  28,  -1
+ dc  192,  -1, 152, 121,  -1, 226,  -1,  46,  30, -15,  -7,  -3,  -1, 211,  45
+ dc   -1, 210, 209,  -5,  -1,  59,  -1, 151, 136,  29,  -7,  -3,  -1, 196, 107
+ dc   -1, 195, 167,  -1,  44,  -1, 194, 181, -23, -13,  -7,  -3,  -1, 193,  12
+ dc   -1,  75, 180,  -3,  -1, 106, 166, 179,  -5,  -3,  -1,  90, 165,  43,  -1
+ dc  178,  27, -13,  -5,  -1, 177,  -1,  11, 176,  -3,  -1, 105, 150,  -1,  74
+ dc  164,  -5,  -3,  -1, 120, 135, 163,  -3,  -1,  58,  89,  42, -97, -57, -33
+ dc  -19, -11,  -5,  -3,  -1, 149, 104, 161,  -3,  -1, 134, 119, 148,  -5,  -3
+ dc   -1,  73,  87, 103, 162,  -5,  -1,  26,  -1,  10, 160,  -3,  -1,  57, 147
+ dc   -1,  88, 133,  -9,  -3,  -1,  41, 146,  -3,  -1, 118,   9,  25,  -5,  -1
+ dc  145,  -1, 144,  72,  -3,  -1, 132, 117,  -1,  56, 131, -21, -11,  -5,  -3
+ dc   -1, 102,  40, 130,  -3,  -1,  71, 116,  24,  -3,  -1, 129, 128,  -3,  -1
+ dc    8,  86,  55,  -9,  -5,  -1, 115,  -1, 101,  70,  -1,  39, 114,  -5,  -3
+ dc   -1, 100,  85,   7,  23, -23, -13,  -5,  -1, 113,  -1, 112,  54,  -3,  -1
+ dc   99,  69,  -1,  84,  38,  -3,  -1,  98,  22,  -1,  97,  -1,   6,  96,  -9
+ dc   -5,  -1,  83,  -1,  53,  68,  -1,  37,  82,  -1,  81,  -1,  21,   5, -33
+ dc  -23, -13,  -7,  -3,  -1,  52,  67,  -1,  80,  36,  -3,  -1,  66,  51,  20
+ dc   -5,  -1,  65,  -1,   4,  64,  -1,  35,  50,  -3,  -1,  19,  49,  -3,  -1
+ dc    3,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  -3,  -1,  17,   1,  16
+ dc    0
+htab24
+ dc -451,-117, -43, -25, -15,  -7,  -3,  -1, 239, 254,  -1, 223, 253,  -3,  -1
+ dc  207, 252,  -1, 191, 251,  -5,  -1, 250,  -1, 175, 159,  -1, 249, 248,  -9
+ dc   -5,  -3,  -1, 143, 127, 247,  -1, 111, 246,  -3,  -1,  95, 245,  -1,  79
+ dc  244, -71,  -7,  -3,  -1,  63, 243,  -1,  47, 242,  -5,  -1, 241,  -1,  31
+ dc  240, -25,  -9,  -1,  15,  -3,  -1, 238, 222,  -1, 237, 206,  -7,  -3,  -1
+ dc  236, 221,  -1, 190, 235,  -3,  -1, 205, 220,  -1, 174, 234, -15,  -7,  -3
+ dc   -1, 189, 219,  -1, 204, 158,  -3,  -1, 233, 173,  -1, 218, 188,  -7,  -3
+ dc   -1, 203, 142,  -1, 232, 157,  -3,  -1, 217, 126,  -1, 231, 172, 255,-235
+ dc -143, -77, -45, -25, -15,  -7,  -3,  -1, 202, 187,  -1, 141, 216,  -5,  -3
+ dc   -1,  14, 224,  13, 230,  -5,  -3,  -1, 110, 156, 201,  -1,  94, 186,  -9
+ dc   -5,  -1, 229,  -1, 171, 125,  -1, 215, 228,  -3,  -1, 140, 200,  -3,  -1
+ dc   78,  46,  62, -15,  -7,  -3,  -1, 109, 214,  -1, 227, 155,  -3,  -1, 185
+ dc  170,  -1, 226,  30,  -7,  -3,  -1, 225,  93,  -1, 213, 124,  -3,  -1, 199
+ dc   77,  -1, 139, 184, -31, -15,  -7,  -3,  -1, 212, 154,  -1, 169, 108,  -3
+ dc   -1, 198,  61,  -1, 211,  45,  -7,  -3,  -1, 210,  29,  -1, 123, 183,  -3
+ dc   -1, 209,  92,  -1, 197, 138, -17,  -7,  -3,  -1, 168, 153,  -1,  76, 196
+ dc   -3,  -1, 107, 182,  -3,  -1, 208,  12,  60,  -7,  -3,  -1, 195, 122,  -1
+ dc  167,  44,  -3,  -1, 194,  91,  -1, 181,  28, -57, -35, -19,  -7,  -3,  -1
+ dc  137, 152,  -1, 193,  75,  -5,  -3,  -1, 192,  11,  59,  -3,  -1, 176,  10
+ dc   26,  -5,  -1, 180,  -1, 106, 166,  -3,  -1, 121, 151,  -3,  -1, 160,   9
+ dc  144,  -9,  -3,  -1, 179, 136,  -3,  -1,  43,  90, 178,  -7,  -3,  -1, 165
+ dc   27,  -1, 177, 105,  -1, 150, 164, -17,  -9,  -5,  -3,  -1,  74, 120, 135
+ dc   -1,  58, 163,  -3,  -1,  89, 149,  -1,  42, 162,  -7,  -3,  -1, 161, 104
+ dc   -1, 134, 119,  -3,  -1,  73, 148,  -1,  57, 147, -63, -31, -15,  -7,  -3
+ dc   -1,  88, 133,  -1,  41, 103,  -3,  -1, 118, 146,  -1,  25, 145,  -7,  -3
+ dc   -1,  72, 132,  -1,  87, 117,  -3,  -1,  56, 131,  -1, 102,  40, -17,  -7
+ dc   -3,  -1, 130,  24,  -1,  71, 116,  -5,  -1, 129,  -1,   8, 128,  -1,  86
+ dc  101,  -7,  -5,  -1,  23,  -1,   7, 112, 115,  -3,  -1,  55,  39, 114, -15
+ dc   -7,  -3,  -1,  70, 100,  -1,  85, 113,  -3,  -1,  54,  99,  -1,  69,  84
+ dc   -7,  -3,  -1,  38,  98,  -1,  22,  97,  -5,  -3,  -1,   6,  96,  53,  -1
+ dc   83,  68, -51, -37, -23, -15,  -9,  -3,  -1,  37,  82,  -1,  21,  -1,   5
+ dc   80,  -1,  81,  -1,  52,  67,  -3,  -1,  36,  66,  -1,  51,  20,  -9,  -5
+ dc   -1,  65,  -1,   4,  64,  -1,  35,  50,  -1,  19,  49,  -7,  -5,  -3,  -1
+ dc    3,  48,  34,  18,  -1,  33,  -1,   2,  32,  -3,  -1,  17,   1,  -1,  16
+ dc    0
+htaba
+ dc  -29, -21, -13,  -7,  -3,  -1,  11,  15,  -1,  13,  14,  -3,  -1,   7,   5
+ dc    9,  -3,  -1,   6,   3,  -1,  10,  12,  -3,  -1,   2,   1,  -1,   4,   8
+ dc    0
+htabb
+ dc  -15,  -7,  -3,  -1,  15,  14,  -1,  13,  12,  -3,  -1,  11,  10,  -1,   9
+ dc    8,  -7,  -3,  -1,   7,   6,  -1,   5,   4,  -3,  -1,   3,   2,  -1,   1
+ dc    0
+htablinbits
+ dc 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,6,8,10,13,4,5,6,7,8,9,11,13,0,0
+htabs
+ dc htab00,htab01,htab02,htab03,htab04,htab05,htab06,htab07,htab08,htab09
+ dc htab10,htab11,htab12,htab13,htab14,htab15,htab16,htab16,htab16,htab16
+ dc htab16,htab16,htab16,htab16,htab24,htab24,htab24,htab24,htab24,htab24
+ dc htab24,htab24,htaba,htabb
+
+
+sfbands_p
+	ds	1
+sfbands_tab
+	dc	sfbands_44100,sfbands_48000,sfbands_32000
+sfbands_44100
+ dc 0,12,24,36,48,66,90,120,156,198,252,318,408,576
+sfbands_48000
+ dc 0,12,24,36,48,66,84,114,150,192,240,300,378,576
+sfbands_32000
+ dc 0,12,24,36,48,66,90,126,174,234,312,414,540,576
+sfbandl_p
+	ds	1
+sfbandl_tab
+	dc	sfbandl_44100,sfbandl_48000,sfbandl_32000
+sfbandl_44100
+ dc 0,4,8,12,16,20,24,30,36,44,52,62,74,90,110,134,162,196,238,288,342,418,576
+sfbandl_48000
+ dc 0,4,8,12,16,20,24,30,36,42,50,60,72,88,106,128,156,190,230,276,330,384,576
+sfbandl_32000
+ dc 0,4,8,12,16,20,24,30,36,44,54,66,82,102,126,156,194,240,296,364,448,550,576
+
+pretab
+ dc 0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,2,2,3,3,3,2,0
+
+
+sfbtab0		dc	0,6,11,16,21
+sfbtab1		dc	0,9,18,24,36
+sfbtab2		dc	0,8,17,23,35
+
+cs_ca_tab_p	dc	cs_ca_tab
+
+imdct_windows
+;win_type=0  NORMAL_WINDOW
+ dc $059552,$10b515,$1bb44b,$267d87,$30fbc5,$3b1a94,$44c63c,$4debe5,$5679bd
+ dc $5e5f1b,$658c9a,$6bf440,$718992,$7641af,$7a1366,$7cf744,$7ee7aa,$7fe0d0
+ dc $7fe0d0,$7ee7aa,$7cf744,$7a1366,$7641af,$718992,$6bf440,$658c9a,$5e5f1b
+ dc $5679bd,$4debe5,$44c63c,$3b1a94,$30fbc5,$267d87,$1bb44b,$10b515,$059552
+;win_type=1  START_WINDOW
+ dc $059552,$10b515,$1bb44b,$267d87,$30fbc5,$3b1a94,$44c63c,$4debe5,$5679bd
+ dc $5e5f1b,$658c9a,$6bf440,$718992,$7641af,$7a1366,$7cf744,$7ee7aa,$7fe0d0
+ dc $7fffff,$7fffff,$7fffff,$7fffff,$7fffff,$7fffff,$7ee7aa,$7641af,$658c9a
+ dc $4debe5,$30fbc5,$10b515,$000000,$000000,$000000,$000000,$000000,$000000
+;win_type=2 -> useless, because this case is done by short block imdct code.
+; ds 36
+
+slentab0	dc	0,0,0,0,3,1,1,1,2,2,2,3,3,3,4,4
+slentab1	dc	0,1,2,3,0,1,2,3,1,2,3,1,2,3,2,3
+newslen		ds	4
+
+;win_type=3  STOP_WINDOW
+ dc $000000,$000000,$000000,$000000,$000000,$000000,$10b515,$30fbc5,$4debe5
+ dc $658c9a,$7641af,$7ee7aa,$7fffff,$7fffff,$7fffff,$7fffff,$7fffff,$7fffff
+ dc $7fe0d0,$7ee7aa,$7cf744,$7a1366,$7641af,$718992,$6bf440,$658c9a,$5e5f1b
+ dc $5679bd,$4debe5,$44c63c,$3b1a94,$30fbc5,$267d87,$1bb44b,$10b515,$059552
+
+
+imdct_l_tab
+;coefficients for long blocks imdct
+;they are stored in order of use, so do not change their order !
+;lots of them are divided by two in order to use fixed point representation
+
+;9 points idct on even indices and twiddle factors,
+;or butterflies for 36 points idct
+; all factors are/2
+ dc	1.8793852415718/2
+ dc	1.532088886238/2
+ dc	0.5
+ dc	0.34729635533386/2
+ dc	1.9696155060244/2	;tmp0_
+ dc	1.732050808/2
+ dc	1.2855752193731/2
+ dc	0.68404028665134/2
+ dc	1.732050808/2		;tmp1_
+ dc	-0.34729635533386/2
+ dc	-1.8793852415718/2
+ dc	1.532088886238/2
+ dc	1.2855752193731/2	;tmp2_
+ dc	-1.732050808/2
+ dc	-0.68404028665134/2
+ dc	1.9696155060244/2
+ dc	-1.532088886238/2
+ dc	0.34729635533386/2
+ dc	-1.8793852415718/2
+ dc	0.68404028665134/2	;tmp3_
+ dc	-1.732050808/2
+ dc	1.9696155060244/2
+ dc	-1.2855752193731/2
+;9 points idct on odd indices and twiddle factors,
+;or butterflies for 36 points idct
+; all factors are/2 except some o factors /8 or not divided.
+ dc	1.8793852415718/2
+ dc	1.532088886238/2
+ dc	0.34729635533386/2
+ dc	1.9696155060244/2	;tmp0_o
+ dc	1.732050808/2
+ dc	1.2855752193731/2
+ dc	0.68404028665134/2
+ dc	0.501909918	 	;o0 factor
+ dc	5.736856623/8		;o7 factor
+ dc	1.732050808/2		;tmp1_o
+ dc	0.517638090		;o1 factor
+ dc	1.931851653/2		;o6 factor
+ dc	-0.34729635533386/2
+ dc	-1.8793852415718/2
+ dc	1.532088886238/2
+ dc	1.2855752193731/2	;tmp2_o
+ dc	-1.732050808/2
+ dc	-0.68404028665134/2
+ dc	1.9696155060244/2
+ dc	0.551688959		;o2 factor
+ dc	1.183100792/2		;o5 factor
+ dc	-1.532088886238/2
+ dc	0.34729635533386/2
+ dc	-1.8793852415718/2
+ dc	0.68404028665134/2	;tmp3_o
+ dc	-1.732050808/2
+ dc	1.9696155060244/2
+ dc	-1.2855752193731/2
+ dc	0.610387294		;o3 factor
+ dc	0.871723397		;o4 factor
+ dc	0.707106781/2		;tmp4o + twiddle factor
+;factors for final tmp computation
+imdct_l_tab2_p	dc	imdct_l_tab2
+imdct_l_tab2
+ dc	-0.250238171
+ dc	-0.25215724
+ dc	-0.2560698785
+ dc	-0.262132281
+ dc	-0.541196100 
+ dc	-0.2818454865
+ dc	-0.2964222615
+ dc	-0.3151181035
+ dc	-0.339085426
+ dc	-0.370046808
+ dc	-0.4106699075
+ dc	-0.465289749
+ dc	-0.5414201425
+ dc	-1.306562965/2
+ dc	-0.831377381
+ dc	-1.155056579/2
+ dc	-1.915324394/2
+ dc	-5.731396405/8
+
+
+imdct_s_tab
+;coefficients for short blocks imdct
+;they are stored in order of use, so do not change their order !
+;some of them are divided by two in order to use fixed point representation
+
+;3 points idct/6 points idct+twiddle factors for odd indices
+ dc	0.866025403,0.5	;for tmp0 and tmp5
+ dc	0.517638090		;twiddle factor for tmp5
+ dc	0.707106781		;twiddle factor for tmp4
+ dc	0.5
+ dc	1.931851653/2		;twiddle factor/2 for tmp3
+;12 points twiddle/shifting to imdct/windowing factors
+imdct_s_tab2_p	dc	imdct_s_tab2
+imdct_s_tab2
+ dc	0.1072063584		;first imdct point=out[6]
+ dc	0.4999999996
+ dc	2.33195123/4		;/4
+ dc	-3.03905801/4		;/4
+ dc	-1.207106781/2		;/2
+ dc	-0.8143131387
+ dc	-0.6248444486
+ dc	-0.4999999996
+ dc	-0.4000995771
+ dc	-0.3070072035
+ dc	-0.2071067809
+ dc	-0.08226233216
+
+
+
+	;** quantab - y=2^((x-210)/4)
+	;** for DSP double precision mode: factor 2^(23+12)
+	;max = (double)0x1000000;
+	;val = pow( 2.0, ((double)i-210.0) * 0.25 ) * (double)(1<<12);
+	;quantab[i*2]   = (LONG)( val * 0.5 );
+	;quantab[i*2+1] = (LONG)( fmod( ldexp(val,23) , max ) + 0.5 );
+x_quantab
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000000, $000000,$000000
+ dc	$000000,$000000, $000000,$000000, $000000,$000001, $000000,$000001
+ dc	$000000,$000001, $000000,$000001, $000000,$000001, $000000,$000001
+ dc	$000000,$000001, $000000,$000002, $000000,$000002, $000000,$000002
+ dc	$000000,$000003, $000000,$000003, $000000,$000004, $000000,$000005
+ dc	$000000,$000006, $000000,$000007, $000000,$000008, $000000,$00000a
+ dc	$000000,$00000b, $000000,$00000d, $000000,$000010, $000000,$000013
+ dc	$000000,$000017, $000000,$00001b, $000000,$000020, $000000,$000026
+ dc	$000000,$00002d, $000000,$000036, $000000,$000040, $000000,$00004c
+ dc	$000000,$00005b, $000000,$00006c, $000000,$000080, $000000,$000098
+ dc	$000000,$0000b5, $000000,$0000d7, $000000,$000100, $000000,$000130
+ dc	$000000,$00016a, $000000,$0001af, $000000,$000200, $000000,$000261
+ dc	$000000,$0002d4, $000000,$00035d, $000000,$000400, $000000,$0004c2
+ dc	$000000,$0005a8, $000000,$0006ba, $000000,$000800, $000000,$000983
+ dc	$000000,$000b50, $000000,$000d74, $000000,$001000, $000000,$001307
+ dc	$000000,$0016a1, $000000,$001ae9, $000000,$002000, $000000,$00260e
+ dc	$000000,$002d41, $000000,$0035d1, $000000,$004000, $000000,$004c1c
+ dc	$000000,$005a82, $000000,$006ba2, $000000,$008000, $000000,$009838
+ dc	$000000,$00b505, $000000,$00d745, $000000,$010000, $000000,$013070
+ dc	$000000,$016a0a, $000000,$01ae8a, $000000,$020000, $000000,$0260e0
+ dc	$000000,$02d414, $000000,$035d14, $000000,$040000, $000000,$04c1c0
+ dc	$000000,$05a828, $000000,$06ba28, $000000,$080000, $000000,$09837f
+ dc	$000000,$0b504f, $000000,$0d7450, $000000,$100000, $000000,$1306fe
+ dc	$000000,$16a09e, $000000,$1ae8a0, $000000,$200000, $000000,$260dfc
+ dc	$000000,$2d413d, $000000,$35d13f, $000000,$400000, $000000,$4c1bf8
+ dc	$000000,$5a827a, $000000,$6ba27e, $000000,$800000, $000000,$9837f0
+ dc	$000000,$b504f3, $000000,$d744fd, $000001,$000000, $000001,$306fe1
+ dc	$000001,$6a09e6, $000001,$ae89fa, $000002,$000000, $000002,$60dfc1
+ dc	$000002,$d413cd, $000003,$5d13f3, $000004,$000000, $000004,$c1bf83
+ dc	$000005,$a8279a, $000006,$ba27e6, $000008,$000000, $000009,$837f05
+ dc	$00000b,$504f33, $00000d,$744fcd, $000010,$000000, $000013,$06fe0a
+ dc	$000016,$a09e66, $00001a,$e89f99, $000020,$000000, $000026,$0dfc14
+ dc	$00002d,$413ccd, $000035,$d13f33, $000040,$000000, $00004c,$1bf829
+ dc	$00005a,$82799a, $00006b,$a27e65, $000080,$000000, $000098,$37f052
+ dc	$0000b5,$04f334, $0000d7,$44fccb, $000100,$000000, $000130,$6fe0a3
+ dc	$00016a,$09e668, $0001ae,$89f996, $000200,$000000, $000260,$dfc146
+ dc	$0002d4,$13ccd0, $00035d,$13f32b, $000400,$000000, $0004c1,$bf828c
+ dc	$0005a8,$2799a0, $0006ba,$27e657, $000800,$000000, $000983,$7f0519
+ dc	$000b50,$4f3340, $000d74,$4fccad, $001000,$000000, $001306,$fe0a32
+ dc	$0016a0,$9e667f, $001ae8,$9f995b, $002000,$000000, $00260d,$fc1463
+ dc	$002d41,$3cccfe, $0035d1,$3f32b6, $004000,$000000, $004c1b,$f828c7
+ dc	$005a82,$7999fd, $006ba2,$7e656b, $008000,$000000, $009837,$f0518e
+ dc	$00b504,$f333fa, $00d744,$fccad7, $010000,$000000, $01306f,$e0a31b
+ dc	$016a09,$e667f4, $01ae89,$f995ad, $020000,$000000, $0260df,$c14637
+ dc	$02d413,$cccfe7, $035d13,$f32b5a, $040000,$000000, $04c1bf,$828c6e
+ dc	$05a827,$999fcf, $06ba27,$e656b5, $080000,$000000, $09837f,$0518dc
+ dc	$0b504f,$333f9e, $0d744f,$ccad6a, $100000,$000000, $1306fe,$0a31b7
+ dc	$16a09e,$667f3c, $1ae89f,$995ad4, $200000,$000000, $260dfc,$14636e
+ dc	$2d413c,$ccfe78, $35d13f,$32b5a7, $400000,$000000, $4c1bf8,$28c6dc
+
+
+
+
+
+
+	org	y:
+
+	align	16
+cs_ca_tab
+ dc  0.857492925712, -0.5144957554270
+ dc  0.881741997318, -0.4717319685650
+ dc  0.949628649103, -0.3133774542040
+ dc  0.983314592492, -0.1819131996110
+ dc  0.995517816065, -0.0945741925262
+ dc  0.999160558175, -0.0409655828852
+ dc  0.999899195243, -0.0141985685725
+ dc  0.999993155067, -0.0036999746738
+
+;->ydata+16
+busy	dc	0
+
+;->ydata+17
+forcemono
+	dc	0
+
+;->ydata+18
+pow43tab
+	ds	8206		;comes from main prog (see 'MP3_pow43tab.h')
+
+;	dc	"**prev0**"
+hybrid_prev0		ds	576
+;	dc	"**prev1**"
+hybrid_prev1		ds	576
+;	dc	"**prev.**"
+
+;	dc	"**reorder***"
+y_reorder		ds	576-378	;largest scalefactor-band for short blocks
+;	dc	">>reorder<<<"
+
+synth_tab_window
+ dc $000000,$fff8c1,$003540,$ff8d41,$01fd40,$faf7c1,$066b80,$db63c1
+ dc $494780,$249c40,$066b80,$050840,$01fd40,$0072c0,$003540,$000740
+ dc $ffffc1,$fff841,$003680,$ff7e41,$01f400,$fa9cc1,$05d1c0,$d99601
+ dc $493c00,$22ce00,$06f780,$04ad00,$0203c0,$006440,$003400,$000680
+ dc $ffffc1,$fff741,$003780,$ff6ec1,$01e800,$fa4241,$052a00,$d7ca01
+ dc $491a00,$20ffc0,$077600,$045240,$020800,$0056c0,$003280,$000600
+ dc $ffffc1,$fff681,$003840,$ff5ec1,$01d940,$f9e8c1,$047440,$d60081
+ dc $48e180,$1f32c0,$07e700,$03f7c0,$0209c0,$004980,$003100,$000540
+ dc $ffffc1,$fff5c1,$0038c0,$ff4e41,$01c780,$f990c1,$03b000,$d43ac1
+ dc $489240,$1d6800,$084b00,$039e40,$020940,$003d00,$002f80,$0004c0
+ dc $ffffc1,$fff4c1,$003900,$ff3d41,$01b2c0,$f93a41,$02ddc0,$d279c1
+ dc $482d00,$1ba040,$08a200,$0345c0,$0206c0,$003140,$002dc0,$000440
+ dc $ffffc1,$fff3c1,$003900,$ff2c01,$019b00,$f8e641,$01fd40,$d0be81
+ dc $47b1c0,$19dc80,$08ecc0,$02ef00,$020240,$002640,$002c00,$000400
+ dc $ffff81,$fff2c1,$0038c0,$ff1a41,$017fc0,$f894c1,$010e80,$cf09c1
+ dc $4720c0,$181d80,$092b40,$0299c0,$01fc00,$001bc0,$002a40,$000380
+ dc $ffff81,$fff181,$003800,$ff0841,$016180,$f84681,$001180,$cd5cc1
+ dc $467a40,$166440,$095e00,$024680,$01f440,$001200,$002840,$000340
+ dc $ffff81,$fff041,$003740,$fef601,$014000,$f7fbc1,$ff0681,$cbb881
+ dc $45bf00,$14b140,$098580,$01f580,$01ea80,$000900,$002680,$0002c0
+ dc $ffff81,$ffef01,$0035c0,$fee3c1,$011ac0,$f7b541,$fded81,$ca1d81
+ dc $44ef80,$130580,$09a1c0,$01a700,$01dfc0,$000080,$0024c0,$000280
+ dc $ffff41,$ffedc1,$003400,$fed181,$00f280,$f77341,$fcc701,$c88d81
+ dc $440bc0,$1161c0,$09b3c0,$015b00,$01d380,$fff8c1,$0022c0,$000240
+ dc $ffff41,$ffec41,$003200,$febf41,$00c680,$f73681,$fb92c1,$c708c1
+ dc $431500,$0fc6c0,$09bb80,$0111c0,$01c640,$fff1c1,$002100,$000200
+ dc $ffff01,$ffeac1,$002f40,$fead01,$009740,$f6ff41,$fa5181,$c59081
+ dc $420b40,$0e3500,$09b9c0,$00cb80,$01b7c0,$ffeb41,$001f40,$0001c0
+ dc $ffff01,$ffe941,$002c40,$fe9b01,$006480,$f6ce01,$f90381,$c425c1
+ dc $40ef80,$0cad00,$09af00,$008840,$01a880,$ffe581,$001d40,$0001c0
+ dc $fffec1,$ffe7c1,$0028c0,$fe8981,$002e40,$f6a3c1,$f7a901,$c2c901
+ dc $3fc280,$0b2fc0,$099b80,$004800,$019880,$ffe041,$001bc0,$000180
+ dc $fffec1,$ffe601,$002480,$fe7841,$fff4c1,$f68041,$f64241,$c17b41
+ dc $3e84c0,$09bdc0,$097fc0,$000b40,$0187c0,$ffdb81,$001a00,$000140
+ dc $fffe81,$ffe441,$001fc0,$fe6781,$ffb801,$f66481,$f4d041,$c03d81
+ dc $3d3700,$085700,$095c40,$ffd1c1,$017680,$ffd741,$001840,$000140
+ dc $fffe41,$ffe2c1,$001a80,$fe5781,$ff77c1,$f65101,$f35301,$bf1081
+ dc $3bda40,$06fc80,$093200,$ff9b81,$016500,$ffd3c1,$0016c0,$000100
+ dc $fffe41,$ffe0c1,$0014c0,$fe4841,$ff3481,$f64641,$f1cb01,$bdf4c1
+ dc $3a6f80,$05ae80,$0900c0,$ff68c1,$015300,$ffd0c1,$001540,$000100
+ dc $fffe01,$ffdf01,$000e40,$fe39c1,$feee41,$f64481,$f03941,$bceb01
+ dc $38f740,$046d40,$08c980,$ff3981,$0140c0,$ffce01,$0013c0,$0000c0
+ dc $fffdc1,$ffdd41,$000740,$fe2c81,$fea501,$f64c41,$ee9e41,$bbf441
+ dc $377280,$033900,$088cc0,$ff0d81,$012e80,$ffcc01,$001240,$0000c0
+ dc $fffd81,$ffdb41,$ffff81,$fe2041,$fe5901,$f65e41,$ecfa81,$bb1081
+ dc $35e280,$021280,$084ac0,$fee541,$011c40,$ffca41,$001100,$000080
+ dc $fffd41,$ffd981,$fff701,$fe1581,$fe0a81,$f67a81,$eb4ec1,$ba4101
+ dc $344780,$00f980,$080440,$fec001,$010a00,$ffc8c1,$000fc0,$000080
+ dc $fffcc1,$ffd7c1,$ffee01,$fe0bc1,$fdb981,$f6a201,$e99bc1,$b985c1
+ dc $32a340,$ffee81,$07b980,$fe9e81,$00f7c0,$ffc801,$000e80,$000080
+ dc $fffc81,$ffd5c1,$ffe441,$fe0401,$fd6641,$f6d4c1,$e7e281,$b8df41
+ dc $30f640,$fef181,$076b40,$fe8041,$00e5c0,$ffc741,$000d40,$000080
+ dc $fffc01,$ffd401,$ffd9c1,$fdfdc1,$fd1101,$f71341,$e62381,$b84e41
+ dc $2f4180,$fe02c1,$0719c0,$fe6501,$00d400,$ffc701,$000c40,$000040
+ dc $fffbc1,$ffd241,$ffcec1,$fdf941,$fcba41,$f75e01,$e45fc1,$b7d301
+ dc $2d8640,$fd2241,$06c5c0,$fe4d41,$00c2c0,$ffc701,$000b40,$000040
+ dc $fffb41,$ffd081,$ffc301,$fdf6c1,$fc61c1,$f7b501,$e29801,$b76dc1
+ dc $2bc540,$fc5001,$066f40,$fe3881,$00b1c0,$ffc741,$000a40,$000040
+ dc $fffac1,$ffcf01,$ffb681,$fdf641,$fc0841,$f81901,$e0cd41,$b71e81
+ dc $29ff80,$fb8bc1,$061740,$fe26c1,$00a140,$ffc7c1,$000980,$000040
+ dc $fffa01,$ffcd81,$ffa941,$fdf801,$fbadc1,$f88a01,$df0041,$b6e601
+ dc $283600,$fad601,$05bdc0,$fe1801,$009140,$ffc881,$0008c0,$000040
+ dc $fff981,$ffcc01,$ff9bc1,$fdfc41,$fb5301,$f90881,$dd3201,$b6c401
+ dc $266a00,$fa2e41,$056340,$fe0c01,$0081c0,$ffc981,$0007c0,$000040
+synth_tab_sinx
+ dc  0.000000, 0.049068, 0.098017, 0.146730	;sine only
+ dc  0.195090, 0.242980, 0.290285, 0.336890
+ dc  0.382683, 0.427555, 0.471397, 0.514103
+ dc  0.555570, 0.595699, 0.634393, 0.671559
+ dc  0.707107, 0.740951, 0.773010, 0.803208
+ dc  0.831470, 0.857729, 0.881921, 0.903989
+ dc  0.923880, 0.941544, 0.956940, 0.970031
+ dc  0.980785, 0.989177, 0.995185, 0.998795
+synth_tab_cosx
+ dc  0.999999, 0.998795, 0.995185, 0.989177	;sine and cosine
+ dc  0.980785, 0.970031, 0.956940, 0.941544
+ dc  0.923880, 0.903989, 0.881921, 0.857729
+ dc  0.831470, 0.803208, 0.773010, 0.740951
+ dc  0.707107, 0.671559, 0.634393, 0.595699
+ dc  0.555570, 0.514103, 0.471397, 0.427555
+ dc  0.382683, 0.336890, 0.290285, 0.242980
+ dc  0.195090, 0.146730, 0.098017, 0.049068
+ dc  0.000000,-0.049068,-0.098017,-0.146730	;cosine only
+ dc -0.195090,-0.242980,-0.290285,-0.336890
+ dc -0.382683,-0.427555,-0.471397,-0.514103
+ dc -0.555570,-0.595699,-0.634393,-0.671559
+ dc -0.707107,-0.740951,-0.773010,-0.803208
+ dc -0.831470,-0.857729,-0.881921,-0.903989
+ dc -0.923880,-0.941544,-0.956940,-0.970031
+ dc -0.980785,-0.989177,-0.995185,-0.998795
+
+
+
+
+
+
+
+
+
+	org	l:
+	align	64
+synth_imfct_slow
+	ds	64
+
+synth_tab_rsinxrcosx
+;	**	x:rsinx		y:rcosx
+	dcl	0.000000,	 0.999999
+	dcl	0.999999,	 0.000000
+	dcl	0.707107,	 0.707107
+	dcl	0.707107,	-0.707107
+	dcl	0.382683,	 0.923880
+	dcl	0.923880,	-0.382683
+	dcl	0.923880,	 0.382683
+	dcl	0.382683,	-0.923880
+	dcl	0.195090,	 0.980785
+	dcl	0.980785,	-0.195090
+	dcl	0.831470,	 0.555570
+	dcl	0.555570,	-0.831470
+	dcl	0.555570,	 0.831470
+	dcl	0.831470,	-0.555570
+	dcl	0.980785,	 0.195090
+	dcl	0.195090,	-0.980785
+	dcl	0.098017,	 0.995185
+	dcl	0.995185,	-0.098017
+	dcl	0.773010,	 0.634393
+	dcl	0.634393,	-0.773010
+	dcl	0.471397,	 0.881921
+	dcl	0.881921,	-0.471397
+	dcl	0.956940,	 0.290285
+	dcl	0.290285,	-0.956940
+	dcl	0.290285,	 0.956940
+	dcl	0.956940,	-0.290285
+	dcl	0.881921,	 0.471397
+	dcl	0.471397,	-0.881921
+	dcl	0.634393,	 0.773010
+	dcl	0.773010,	-0.634393
+	dcl	0.995185,	 0.098017
+	dcl	0.098017,	-0.995185
+
+
+ktab
+;	X: - left		Y: - right
+	dcl	0.000000,	0.999999	;0
+	dcl	0.211325,	0.788675	;1
+	dcl	0.366025,	0.633975	;2
+	dcl	0.500000,	0.500000	;3
+	dcl	0.633975,	0.366025	;4
+	dcl	0.788675,	0.211325	;5
+	dcl	0.999999,	0.000000	;6
+	dcl	0,		0		;7 (SKIP)  1.3660254, -0.3660254
+;end of 3bit-distance
+	dcl	0,		0		;8   2.3660254, -1.3660254
+	dcl	0,		0		;9   NaN (undefined)
+	dcl	0,		0		;10  -1.3660254, 2.3660254
+	dcl	0,		0		;11  -0.3660254, 1.3660254
+	dcl	0.000000,	0.999999	;12
+	dcl	0.211325,	0.788675	;13
+	dcl	0.366025,	0.633975	;14
+	dcl	0.500000,	0.500000	;15
+;end of 4bit-distance
+
+
+;the end

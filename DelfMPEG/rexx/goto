@@ -1,0 +1,26 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx goto <seconds> */
+
+PARSE ARG seconds
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+if seconds=='' then do
+    say 'missing parameter <seconds>'
+    return 20
+end
+
+GETSTATUS
+if ((result==0) | (result>=10)) then do
+    say 'not applicable - player is in STOP mode'
+    return 5
+end
+
+GETDURATION
+if seconds>result then do
+    say 'note: value too high (new pos: ' || seconds || ', duration: ' || result || ')'
+    seconds=result
+end
+
+SETPOSITION seconds

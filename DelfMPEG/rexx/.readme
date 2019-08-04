@@ -1,0 +1,40 @@
+How to use the new ARexx interface of DelfMPEG?
+Here are a few example scripts, to run them from CLI use:
+rx <script> <parameter>
+
+
+cont
+    continue playback (after pause)
+
+forward <seconds>
+    skip forwards inside the current file
+
+goto <seconds>
+    move to a position inside the current file
+
+info
+    show player status and file information
+
+launch
+    launch DelfMPEG in ARexx mode (running in background)
+
+pause
+    pause playback
+
+play <filename>
+    play the specified file
+
+pplay <filename>
+    prepare playback of the specified file (pause mode)
+
+quit
+    quit DelfMPEG
+
+rewind <seconds>
+    skip backwards inside the current file
+
+stop
+    stop playback
+
+vol <volume>
+    set playback volume (in per cent; range 0...200)

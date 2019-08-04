@@ -1,0 +1,212 @@
+;*****************************************************************************
+;
+;    DelfMPEG - MPEG audio player for Delfina DSP
+;    Copyright (C) 1999-2003  Michael Henke
+;
+;    This program is free software; you can redistribute it and/or modify
+;    it under the terms of the GNU General Public License as published by
+;    the Free Software Foundation; either version 2 of the License, or
+;    (at your option) any later version.
+;
+;    This program is distributed in the hope that it will be useful,
+;    but WITHOUT ANY WARRANTY; without even the implied warranty of
+;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;    GNU General Public License for more details.
+;
+;    You should have received a copy of the GNU General Public License
+;    along with this program; if not, write to the Free Software
+;    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+;
+;*****************************************************************************
+
+
+
+
+;Delfina object DSP56K_PCM
+;memory map (for Amiga access)
+;
+; prog
+;   0 .. init (x1=mono, x0=volume, y1=freq, y0=/)
+;  +2 .. mute (x1=/, x0=/, y1=/, y0=/)
+;  +4 .. decode_and_interrupt
+;  +6 .. DelfModule
+;
+; xdata
+;   /
+;
+; ydata
+;   0 .. amybuf (Amiga read)
+
+
+
+
+DELFINA_SAMPLES	equ	1152
+
+
+	include 'delfequ.inc'
+
+	org	p:
+
+int_key
+
+;->prog
+	jmp	init
+
+;->prog+2
+	jmp	mute
+
+;->prog+4
+	jmp	decode_and_interrupt
+
+;->prog+6
+	jmp	interrupt_only
+
+;->prog+8
+
+;***********************************
+;* play routine
+;*
+;* r1=list of play buffers
+
+;****	sampling rate conversion
+	move	y:(r1),r4		;r4=output buf
+	move	r4,r7			;r7=copy of r4
+	move	#rateconv,r3		;r3=rateconv structure
+	move	x:bufptr,r6		;r6=old bufptr
+
+	movec	#DELFINA_SAMPLES*2-1,m2 ;m2=input buffer mask
+	jsr	<delf_playrate		;rate conversion
+
+
+;****	duplicate left channel for mono output
+	movec	m0,m7			;#$ffff
+	move	y:mono,b
+	tst	b	r7,r0
+	jeq	not_mono
+	move	r7,n7
+	move	x:(r0)+,a
+	rep	#127
+	move	x:(r0)+,a	a,y:(r7)+
+	move	a,y:(r7)
+	move	n7,r7
+not_mono
+
+
+;****	volume adjustment
+	move	y:volume,x1
+	move	#<$40,a			;0.5 = 100%
+	cmp	x1,a	r7,r0
+	jeq	no_volume
+
+	ori	#$08,mr					;SCALE UP mode
+	movec	m0,m5			;#$ffff
+	move	r7,r5
+	move	r7,r1
+
+	move			x:(r0)+,x0	y:(r5)+,y0
+	mpyr	x0,x1,a		x:(r0)+,x0
+	mpyr	y0,x1,b		a,x:(r1)+	y:(r5)+,y0
+	do	#127,volume_loop
+	mpyr	x0,x1,a		x:(r0)+,x0	b,y:(r7)+
+	mpyr	y0,x1,b		a,x:(r1)+	y:(r5)+,y0
+volume_loop
+	move					b,y:(r7)+
+
+	andi	#$f3,mr					;NO SCALING mode
+no_volume
+	
+
+;****	double buffering
+	move	r6,y1			;y1=old pointer
+	move	y:buf2,b		;b= start of buf2
+	cmp	y1,b	r2,y0		;y0=new pointer
+	jle	dbuf_buf2
+	cmp	y0,b	y:buf1,x0
+	jgt	dbuf_skip
+dbuf_int
+	move	x0,y:amybuf		;tell amiga the new buffer
+	move	#int_key,a0
+	move	#causeqw,r0
+	jmp	<delf_causeq		;interrupt and exit
+dbuf_buf2
+	cmp	y0,b	b,x0
+	jgt	dbuf_int
+dbuf_skip
+	rts
+
+
+
+;***********************************
+;* init stuff
+;*
+;* x1=mono
+;* x0=volume
+;* y1=freq
+;* y0=decoder address
+init
+	move	x1,y:mono
+	move	x0,y:volume
+	move	y1,x:freq
+	move	y0,y:decoder_address
+	rts
+
+
+;***********************************
+;* clear current buffer (pause mode)
+;*
+;* x1=/
+;* x0=/
+;* y1=/
+;* y0=/
+mute
+	clr	a	y:amybuf,r0
+	do	#DELFINA_SAMPLES,mute_loop
+	move	a,l:(r0)+
+mute_loop
+	move	a,x0
+	rts
+
+
+;***********************************
+;* decode_and_interrupt (write output to file)
+;*
+;* x1=/
+;* x0=/
+;* y1=/
+;* y0=/
+decode_and_interrupt
+	move	y:decoder_address,r0
+	nop
+	jsr	(r0)
+interrupt_only
+	move	#int_key,a0
+	move	#causeqw,r0
+	jsr	<delf_causeq
+	move	#<0,x0
+	rts
+
+
+
+
+	org	l:
+	align	4096		;must be >= DELFINA_SAMPLES*2
+buf	ds	DELFINA_SAMPLES*2
+
+
+	org	x:
+causeqw	dc	0,0
+rateconv
+freq	dc	0
+bufptr	dc	buf+DELFINA_SAMPLES-50
+	ds	4
+	
+	org	y:
+;->ydata
+amybuf	dc	buf
+
+mono	dc	0
+volume	dc	0.5
+decoder_address		dc	0
+
+buf1	dc	buf
+buf2	dc	buf+DELFINA_SAMPLES

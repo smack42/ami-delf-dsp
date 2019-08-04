@@ -1,0 +1,55 @@
+delfinampeg.device CHANGES
+
+
+1.6 (Sat 17-May-2003)
+    -main processing now in SoftInterrupt instead of Delfina hardware IRQ
+     (less interference with timing-critical activities like Serial I/O)
+
+
+1.5 (Sun 03-Nov-2002)
+    -mp3 decoder:
+      -synthesis - corrected output level
+      -huffman/scaling - reorder short blocks only (less memory)
+      -scaling - skip zero scalefactor bands (tiny speedup)
+    -mp2 decoder:
+      -synthesis - corrected output level
+
+
+1.4 (Fri 04-Jan-2002)
+    -mp3 decoder: tiny speedup (further optimized huffman decoding)
+    -device API: fixed NSCMD_DEVICEQUERY (list of supported commands)
+
+
+1.3 (Thu 14-Jun-2001)
+    -little code optimizing
+    -fixed a quite unobvious bug in the cleanupDelfina() routine
+     this avoids the "noisy deadlock" when seeking inside a file in AMPlifier
+     using delfina.library 4.14 (personally, I can tolerate the "fake crash"
+     bug of 4.14 but I *hate* the "sudden freeze" problem of the 4.16ß libs)
+
+
+1.2 (Tue 17-Apr-2001)
+    -little code polishing (not performance-relevant)
+    -minor API function fixes:
+      -CMD_RESET implemented (had completely forgotten it...)
+       now it does: set volume to 100%, clear Pause state and CMD_FLUSH
+      -CMD_WRITE now returns values in io_Actual and io_Error
+       (applications could check io_Error to find out if the sound was really
+       played. for instance, unrecognized stream data (everything other than
+       MPEG-1 audio) results in io_Error=MPEGERR_CMD_FAILED)
+       
+
+1.1 (Sat 07-Apr-2001)
+    -mp3 decoder:
+      -fixed a bug which had caused minor distortions
+      -implemented INTENSITY STEREO decoding (at last)
+    -added configuration options (ENV-variable DELFINAMPEG)
+
+
+1.0 (Sat 04-Nov-2000)  release
+    -much safer MPEG frame header recognition
+     (no more noise or crashes when seeking inside a file with AMPlifier)
+    -added separate volume left/right handling (balance)
+
+
+1.0 (Sun 29-Oct-2000)  BETA

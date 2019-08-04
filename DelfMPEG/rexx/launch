@@ -1,0 +1,21 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx launch */
+
+if show(ports,DELFMPEG) then do
+    say 'DelfMPEG is already running.'
+    return 5
+end
+
+ADDRESS COMMAND 'run <>NIL: DelfMPEG AREXX SHOWTAG'
+
+do loop=1 to 10
+    ADDRESS COMMAND 'wait 1'
+    if ~show(ports,DELFMPEG) then say 'waiting...'
+    else do
+        say 'DelfMPEG launch o.k.'
+        return 0
+    end
+end
+say 'DelfMPEG launch failed.'
+return 20

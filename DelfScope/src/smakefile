@@ -1,0 +1,13 @@
+
+DelfScope: DelfScope.o scope_asm.o scope_dsp.o
+	sc link DelfScope.o scope_asm.o scope_dsp.o to DelfScope
+
+DelfScope.o: DelfScope.c scope_asm.h scope_dsp.h
+	sc DelfScope.c
+
+scope_asm.o: scope_asm.a
+	sc scope_asm.a
+
+scope_dsp.o: scope_dsp.a56
+	a56 scope_dsp.a56 object _DSP56K_SCOPE nolist
+

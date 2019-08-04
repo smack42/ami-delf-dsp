@@ -1,0 +1,8 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx cont */
+
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+CONTINUE

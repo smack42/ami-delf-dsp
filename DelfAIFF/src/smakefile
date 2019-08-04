@@ -1,0 +1,9 @@
+
+DelfAIFF: DelfAIFF.c PCM.o ADPCM4.o
+	sc link DelfAIFF.c PCM.o ADPCM4.o to DelfAIFF
+
+PCM.o: PCM.a56
+	a56 PCM.a56 object _DSP56K_PCM nolist
+
+ADPCM4.o: ADPCM4.a56
+	a56 ADPCM4.a56 object _DSP56K_ADPCM4 nolist

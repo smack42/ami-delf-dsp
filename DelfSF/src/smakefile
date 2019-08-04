@@ -1,0 +1,12 @@
+
+DelfSF: main.o delf.o delf_PCM.o
+	sc link main.o delf.o delf_PCM.o to DelfSF
+
+main.o: main.c
+	sc main.c
+
+delf.o: delf.c
+	sc delf.c
+
+delf_PCM.o: delf_PCM.a56
+	a56 delf_PCM.a56 object _DSP56K_PCM nolist

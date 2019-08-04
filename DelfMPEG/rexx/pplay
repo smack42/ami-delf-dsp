@@ -1,0 +1,28 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx pplay <file> */
+
+PARSE ARG file
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+if file=='' then do
+    say 'missing parameter <file>'
+    return 20
+end
+
+STOP
+PAUSE
+PLAY file
+
+GETSTATUS
+if ~(result==2) then do
+    if result<10 then say 'there is a problem, player is not in pause mode'
+    else do
+        text='<no text>'
+        if result==10 then text='initDelfina failed'
+        if result==20 then text='file not found'
+        if result==30 then text='file not recognized as MPEG1 audio'
+        say 'Error #' || result || ': ' || text
+    end
+end

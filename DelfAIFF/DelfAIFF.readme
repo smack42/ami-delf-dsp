@@ -1,0 +1,97 @@
+Short:  AIFF sound player for Delfina DSP
+Author: Smack/Infect! (Michael Henke)
+Type:   mus/play
+
+
+ #features
+   -plays 16bit files: AIFF-SSND (uncompressed) and AIFF-ADP4 (4bit ADPCM)
+   -multi-stage buffering system for smooth playback while loading
+   -full source code included
+
+
+ #requirements
+   -CPU 68020+
+   -AmigaOS V37+
+   -Delfina DSP board - delfina.library V4+
+   -asyncio.library V39+
+
+   -tested on: A1200 (68030+882 @ 40MHz, 16MB Fast, Delfina1200 DSP)
+
+
+ #recommended
+   -reqtools.library V38+
+   -FastRAM
+   -some AIFF files :-)
+
+
+ #news
+   -some code cleanups and optimizations
+    (see src/CHANGES for details)
+   -vbcc makefile included
+    (thanks to anton_rolls@melbourne.net)
+
+;
+;
+;---------------------------------
+;
+; DelfAIFF 0.3
+; code by Smack/Infect!
+; Fri 01-Oct-1999
+;
+;---------------------------------
+;
+;
+
+
+ #introduction
+   This is my first program for Delfina DSP (nice sound board featuring
+   the powerful Motorola 56002 DSP). I have no intentions to implement
+   many more features in DelfAIFF because for me it's rather a coding
+   exercise than a full featured tool. Anyway, if you find a bug or have
+   any comments or ideas then don't hesitate to contact me!
+   
+
+ #how to use it
+   DelfAIFF is a shell-only program. The argument template is:
+   FILES/M          one or more filenames
+                    (if omitted a reqtools file requester appears)
+   NOPLAY/S         don't play but just print file info
+
+   During playback you can use these controls:
+   CTRL-E           pause/continue
+   CTRL-C           stop current file, start next file
+   CTRL-D           exit program
+
+
+ #technical stuff
+   Those AIFF-ADP4 files are created using this program:
+      AudioConvert V1.0 (c) Stephane TAVENARD
+      (distributed together with SongPlayer)
+   The 4bit ADPCM method reduces the file size of 16bit sound to 1/4 while
+   retaining a surprisingly high sound quality.
+   DelfAIFF utilizes Delfina DSP for decoding this file format and therefore
+   needs only very little CPU time. (perfect for background music even on
+   slow 68030 machines:-)
+
+   I'm planning to code an MPEG audio decoder for Delfina DSP. The 56002 DSP
+   should have enough power to handle this in realtime. (faster than 68060!)
+   Anybody interested? Anybody able to support me with some docs and sources?
+   Then contact me now!
+
+   UPDATE:
+   The MPEG audio player is under construction. I downloaded lots of sources
+   from all over the Web and now I'm busy converting them to DSP56K assembly.
+   I hope to get it working before Y2K comes upon us, stay tuned! :-)
+
+
+ #author
+   email: smack@smack.de
+
+   DelfAIFF is Copyright (c) 1999 by Michael Henke.
+   It is released as FREEWARE, which means it may be distributed and used
+   for free, but no profit may be made with it (neither by selling the
+   program nor by using it for commercial purposes). The program and the
+   information within this text are provided 'AS-IS'. The entire risk as
+   to its quality and performance is with the user. In no event will the
+   author be liable for direct, indirect, incidental or consequential
+   damages resulting from any defect in the program.

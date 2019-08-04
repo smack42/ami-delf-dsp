@@ -1,0 +1,138 @@
+Short:  mpeg.device for Delfina DSP
+Author: Smack/Infect! (Michael Henke)
+Type:   mus/play
+
+$VER: delfinampeg.device 1.6 (Sat 17-May-2003)
+
+
+
+#features
+
+  -plays MPEG audio files with almost no CPU load
+   (Delfina's DSP56002 does all the decoding and playback)
+
+  -supports MPEG-1 layer II and III
+
+  -standard "mpeg.device" API
+   (code based on melodympeg.device by Thorsten Hansen)
+
+  -free software
+   (full source code included, of course)
+
+
+
+#requirements
+
+  -CPU 68020+
+  -AmigaOS V37+
+  -Delfina DSP board
+
+  -developed on A1200 - OS3.1/68030+882@40MHz/16MBFastRAM/Delfina1200DSP
+  -tested on various machines with Delfina 1200, Lite, Plus or Flipper
+
+
+
+#recommended
+
+  -application that uses mpeg.device (such as AMPlifier, Frogger and others)
+  -some MPEG audio files :)
+
+
+
+#changes since previous release
+
+  -fixed interference with serial I/O (interrupt timing problem)
+
+
+
+#how to use
+
+  Copy delfinampeg.device to your "devs:" drawer.
+  Configure an application program to make use of it, for instance:
+
+  AMPlifier    http://www.katodev.de
+      Configuration -> Audio I/O -> MPEG audio player -> Decoder
+      MPEG device:    delfinampeg.device
+      Unit:           0
+      Buffersize:     128 (recommended)
+      Blocksize:      16  (recommended)
+      set Layer I/II and Layer III to "Hardware" decoding
+
+  Frogger      http://frogger.rules.pl
+      use the option ADECODER with mode DELFINA
+
+  AmigaAMP     http://www.amigaamp.de
+      get the "MHI driver for mpeg.device" from Aminet: mus/play/mhimdev.lha
+      follow the installation instructions in the README file
+
+  Especially owners of the slower Delfinas (i.e. Lite) might be interested
+  in the configuration options of delfinampeg.device, which can be used to
+  sacrifice some playback quality in order to reduce DSP load. The device
+  reads them from the environment variable DELFINAMPEG during OpenDevice().
+  The options are:
+
+  L2MONO...........mp2 files: decode left channel only
+  L2RATE <number>..mp2 files: play at specified rate (given in kHz)
+  L3MONO...........mp3 files: decode left channel only
+  L3RATE <number>..mp3 files: play at specified rate (given in kHz)
+
+  The given playback rate is automatically rounded to the nearest available
+  Delfina rate (16, 27, 32, 48 kHz; Delfina 1200/Plus: 12, 24, 36, 48 kHz).
+  example:
+  > setenv DELFINAMPEG l3rate 32
+    (play mp3 files at 32 kHz)
+  > copy ENV:DELFINAMPEG ENVARC:
+    (save settings to disk)
+
+
+
+#known problems
+
+  -delfinampeg.device only recognizes MPEG-1 audio files.
+   not supported: MPEG-2 or mixed audio/video files.
+
+  -please read the README for DelfMPEG (Aminet: mus/play/DelfMPEG.lha)
+   in the "known problems" you find a list of bugs in the official Delfina
+   drivers (delfina.library).
+
+  -equalizer and visual effect plugins of AMPlifier are currently not
+   supported. this is not a feature of the mpeg.device. AMPlifier needs to
+   copy the decoded audio data back from the sound board to main memory,
+   which it can only do with the Melody boards but not with Delfina.
+
+
+
+#acknowledgements
+
+  delfinampeg.device uses ideas/code from:
+
+  -MPEG Audio Layer II decoder by Fredrik Noring and Tomas Berndtsson
+   (an mp2 player for Atari Falcon, DSP56K code)
+  -amp11 by Niklas Beisert (clean and fast C++ code)
+  -FalcAMP by Denis "STGhost" Huguet and David "Splash" Carrere
+   (an mp3 player for Atari Falcon, DSP56K code)
+  -reference code by MPEG Software Simulation Group ("the original" C code)
+  -melodympeg.device by Thorsten Hansen
+
+
+
+#author
+
+  mailto: smack42@web.de
+
+  delfinampeg.device - mpeg.device for Delfina DSP
+  Copyright (C) 2000-2003  Michael Henke
+
+  This program is free software; you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation; either version 2 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA

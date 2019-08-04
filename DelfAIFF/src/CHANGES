@@ -1,0 +1,24 @@
+DelfAIFF CHANGES
+
+0.3 (Fri 01-Oct-1999)
+    -better handling of AIFF file structure
+     (now uses a real IFF chunk parser, adapted from SoX sources)
+    -minor cleanups to prevent warnings from pedantic compilers (hi Anton:-)
+
+
+0.2 (Wed 11-Aug-1999)
+    -code cleanups:
+        -call cleanup_delfina() also if init_delfina() failed
+         (fixes possible memory leak)
+        -DSP56K_PCM now uses <delf_causeq instead of <delf_cause
+        -included aligned PCM buffers in DSP56K_PCM object
+        -removed Signal() from interrupt server and Wait() from loading-loop,
+         now uses Delay(1) and mytask->tc_SigRecvd
+        -optimized ADPCM decoder
+         (inline functions are ofcourse faster...)
+    -added NOPLAY/S command line argument
+    -added CTRL-E pause/continue feature
+
+
+0.1 (Sat 24-Jul-1999)
+    -first release

@@ -1,0 +1,18 @@
+
+delfinampeg.device: device.o delfinampeg.o PCM.o MP2.o MP3.o
+	sc link device.o delfinampeg.o PCM.o MP2.o MP3.o  to delfinampeg.device
+
+device.o: device.asm
+	sc device.asm
+
+delfinampeg.o: delfinampeg.c PCM.h MP2.h MP3.h
+	sc delfinampeg.c
+
+PCM.o: PCM.a56
+	a56 PCM.a56 object _DSP56K_PCM nolist
+
+MP2.o: MP2.a56
+	a56 MP2.a56 object _DSP56K_MP2 nolist
+
+MP3.o: MP3.a56
+	a56 MP3.a56 object _DSP56K_MP3 nolist

@@ -1,0 +1,115 @@
+DelfMPEG CHANGES
+
+
+1.0 (Sat 17-May-2003)
+    -main processing now in SoftInterrupt instead of Delfina hardware IRQ
+     (less interference with timing-critical activities like Serial I/O)
+    -recognition of the new Delfina Flipper board (shown in VERBOSE mode)
+    -OUTFILEINTEL option added (write decoded data to a file - Intel byteorder)
+
+
+0.9 (Tue 29-Oct-2002)
+    -mp3 decoder:
+      -synthesis - corrected output level
+      -huffman/scaling - reorder short blocks only (less memory)
+      -scaling - skip zero scalefactor bands (tiny speedup)
+    -mp2 decoder:
+      -synthesis - corrected output level
+    -OUTFILE option added (write decoded data to a file)
+
+
+0.8 (Sun 28-Oct-2001)
+    -mp3 decoder:
+      -tiny speedup (further optimized huffman decoding)
+    -file reader:
+      -added playlist interpreter
+       (if a file is not recognized as MPEG-1 audio then it is interpreted
+       as a playlist file: one file name per line; comment lines beginning
+       with a '#' character are ignored.  this playlist format is generated
+       by popular player programs like AMPlifier, Winamp (*.m3u), etc.)
+
+
+0.7 (Sat 07-Apr-2001)
+    -mp3 decoder:
+      -fixed a bug which had caused minor distortions
+       it was there from the very beginning - nobody ever noticed it??!!
+      -implemented INTENSITY STEREO decoding (at last)
+
+
+0.6 (Thu 27-Jul-2000)
+    -file reader:
+      -fixed a bug in the RIFF header recognition
+    -implemented ARexx interface (AREXX/S option added)
+
+
+0.5 (Sat 08-Jul-2000)
+    -file reader:
+      -RIFF header recognition added
+       (for all guys out there using W*nd*ws encoders)
+      -better handling of unknown data at the beginning of files
+       (now it should recognize more files with strange headers)
+
+
+0.4 (Tue 16-May-2000)
+    -mp3 decoder:
+      -significant speedup!
+       (synthesis, hybrid filter and huffman routines optimized)
+      -bit reservoir handling (performed by the 68K CPU) is now done after
+       calling the DSP decoding routine. this reduces latency time of the
+       interrrupt server, indirectly resulting in another little speedup.
+    -mp2 decoder:
+      -speedup (synthesis routine optimized)
+    -file reader:
+      -bugfix: SHOWTAG option caused problems for files with ID3v2 tag
+      -better sanity check (frame headers) and error report
+      -resync feature and STRICT/S option added
+      -Xing VBR header recognition added (info for Variable BitRate files)
+    -DACRATE/K/N option added
+    -VOLUME/K/N option added
+
+
+0.3 (Sun 09-Apr-2000)
+    -mp3 decoder implemented:
+      -yes, finally it's here!
+       hello to the people who said this would be impossible. ;)
+       thanks to all who supported me with their ideas and source codes.
+      -INTENSITY STEREO decoding is not implemented yet...
+    -mp2 decoder improved:
+      -subband synthesis routine optimized
+       (slightly faster and shorter code, using more internal P-memory)
+      -using more internal L-memory for a little speedup
+      -fixed the "low-bitrate streams sounded really strange" bug
+      -playback quality slightly improved
+       (fixed the little known "intermediate ZERO-bitalloc" bug, which
+       could have resulted in some (hardly audible) distortions)
+    -MPEG file reader improved:
+      -FRAMEBUF/K/N and ASYNCBUF/K/N options added
+       (user controls for allocation of buffer memory)
+      -read error detection added (eg. unexpected end of file)
+      -ID3v2 tag recognition added (for now they are simply skipped)
+    -DECODER_BUSY detection added (prevent DSP overload)
+    -fast forward (Ctrl-F) feature and FFSKIP/K/N option added
+    -position timer output and NOTIMER/S option added
+    -MONO/S option added (force mono decoding - significant speedup)
+
+
+0.2 (Wed 27-Oct-1999)
+    -MPEG file reader improved:
+      -detect MPEG1 sync word only (reject MPEG2 and MPEG2.5 files)
+      -check frameheader changes (layer and sampling freq must be constant)
+      -play already buffered data in case of read error (force EOF)
+    -unsupported files (i.e. other than layer II) are skipped
+    -NOPLAY/S doesn't open delfina.library (it's not required for this)
+    -SHOWTAG/S feature added (display ID3v1 tag before playing)
+    -NOFASTL/S and NOFASTP/S options added
+     (user controls for allocation of the FAST internal DSP memory;
+     the nasty deadlocks/crashes with AHI disappear when using NOFASTP!!)
+    -changed license terms to GNU General Public License
+
+
+0.1 (Fri 15-Oct-1999) RELEASE
+    -mp2 decoder: little speedup (using more internal DSP memory)
+    -mp2 decoder: fixed mono bug
+
+
+0.1 (Thu 07-Oct-1999) BETA_1

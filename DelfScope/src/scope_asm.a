@@ -1,0 +1,425 @@
+;*****************************************************************************
+;
+;    DelfScope - oscilloscope/analyzer for Delfina DSP
+;    Copyright (C) 2000  Michael Henke
+;
+;    This program is free software; you can redistribute it and/or modify
+;    it under the terms of the GNU General Public License as published by
+;    the Free Software Foundation; either version 2 of the License, or
+;    (at your option) any later version.
+;
+;    This program is distributed in the hope that it will be useful,
+;    but WITHOUT ANY WARRANTY; without even the implied warranty of
+;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;    GNU General Public License for more details.
+;
+;    You should have received a copy of the GNU General Public License
+;    along with this program; if not, write to the Free Software
+;    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+;
+;*****************************************************************************
+
+
+
+	XDEF	_ASM_prepare_plot
+	XDEF	_ASM_pcm_plot
+	XDEF	_ASM_fft_plot
+
+	XREF	_GFXBASE
+
+	section	smack1,code
+
+;*******************************************************************
+_ASM_prepare_plot
+	movem.l	d0-d7/a0-a6,-(a7)
+	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d3
+	moveq	#0,d4
+	moveq	#0,d5
+	moveq	#0,d6
+	moveq	#0,d7
+	sub.l	a0,a0
+	sub.l	a1,a1
+	sub.l	a2,a2
+	sub.l	a3,a3
+	sub.l	a4,a4
+	sub.l	a5,a5	;13*4=52 bytes
+	lea	(plot_fastbuf_end),a6	;192*2*512/8=24576 bytes
+	move	#472-1,d0
+.loop	movem.l	d1-d7/a0-a5,-(a6)	;472*52=24544 bytes
+	dbf	d0,.loop
+	movem.l	d1-d7/a0,-(a6)		;24544+32=24576 bytes
+	movem.l	(a7)+,d0-d7/a0-a6
+	rts
+
+
+
+;*******************************************************************
+_ASM_fft_plot
+; a0 - fftbuf
+; a1 - chipmem
+; a2 - rastport (NULL for direct-chipmem mode)
+
+	movem.l	d0-d7/a0-a6,-(a7)
+	move.l	a2,(rp)
+
+;******	plot to FastRAM
+	lea	(plot_fastbuf+512/8*255),a2
+	moveq	#512/8,d2
+	lea	(spectrum_peaks),a3
+	moveq	#416/8-1,d7
+	move	#$00ff,d4
+.fft0_loop
+	moveq	#-$80,d3
+.fft1_loop
+	move	(a0)+,d0
+	lsr	#7,d0		;8bit sample (must be positive!)
+	and	d4,d0
+	lsl	#6,d0		;offset = sample * 64
+	neg	d0
+	move	(a3),d1		;get old peak (negative)
+	add	d2,d1		;decrement
+	cmp	d0,d1
+	bmi	.fft_peak
+	move	d0,d1		;set new peak
+.fft_peak
+	move	d1,(a3)+	;put new peak
+	or.b	d3,(a2,d1)	;draw peak
+.fft2_loop
+	or.b	d3,(a2,d0)
+	add	d2,d0
+	ble.b	.fft2_loop
+	lsr.b	#1,d3
+	bne.b	.fft1_loop
+	addq.l	#1,a2
+	dbf	d7,.fft0_loop
+
+
+;******	copy to ChipRAM
+	lea	(plot_fastbuf),a0
+	move.l	rp(pc),d0
+	beq.b	.fft_direct_chipmem
+
+	lea	bmap(pc),a2
+	move	#512/8,(a2)	;bmap.BytesPerRow
+	move	#256,2(a2)	;bmap.Rows
+	move.l	a0,8(a2)	;bmap.Planes[0]
+	move.l	a2,a0		;a0=source bitmap
+	move.l	d0,a1		;a1=dest rastport
+	moveq	#0,d0		;d0=source topleft x
+	moveq	#0,d1		;d1=source topleft y
+	move.l	#192,d2		;d2=dest topleft x
+	moveq	#113,d3		;d3=dest topleft y
+	move.l	#416,d4		;d4=width
+	move.l	#256,d5		;d5=height
+	move.l	#$c0,d6		;d6=minterm (ABC|ABNC)
+	move.l	(_GFXBASE),a6
+	jsr	-606(a6)	;BltBitMapRastPort()
+	bra.b	.fft_end
+
+.fft_direct_chipmem
+	move	#255,d7
+	moveq	#(512-416)/8,d0
+	moveq	#(640-416)/8,d1
+.fft_copy_loop
+	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	move.l	(a0)+,(a1)+	;13
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d7,.fft_copy_loop
+.fft_end
+	movem.l	(a7)+,d0-d7/a0-a6
+	rts
+
+
+
+rp	dc.l	0
+bmap	dc.w	0,0	;BytesPerRow, Rows
+	dc.b	0,1	;Flags, Depth
+	dc.w	0	;Pad
+	dc.l	0,0,0,0,0,0,0,0	;Planes
+
+
+;*******************************************************************
+_ASM_pcm_plot
+; a0 - pcmbuf
+; a1 - chipmem
+; d0 - numsamp (max. 512)
+	movem.l	d0-d7/a0-a6,-(a7)
+	move.l	a0,-(a7)		;push a0=pcmbuf
+	move.l	a1,-(a7)		;push a1=pcmbuf
+	move.l	d0,-(a7)		;push d0=numsamp
+	move	d0,d7
+	add	#31,d7
+	lsr	#5,d7			;d7=numsamp/32			!! d7
+;******	left channel
+	lea	(plot_fastbuf+512/8*96),a2
+	bsr.b	.plot
+	lea	(plot_fastbuf),a0
+	bsr.b	.copy
+	move.l	(a7)+,d0		;pop d0=numsamp
+	move.l	(a7)+,a1		;pop a1=pcmbuf
+	move.l	(a7)+,a0		;pop a0=pcmbuf
+;******	right channel
+	lea	(plot_fastbuf+512/8*(96+192)),a2
+	add	#1024,a0
+	bsr.b	.plot
+	lea	(plot_fastbuf+512/8*192),a0
+	add.l	#640/8*192,a1
+	bsr.b	.copy
+	movem.l	(a7)+,d0-d7/a0-a6
+	rts
+
+
+;******	plot to FastRAM
+.plot	lsr	#3,d0
+	subq	#1,d0
+	move.b	(a0),d1		;get sample
+	ext	d1
+	neg	d1
+	move	d1,d5
+	add	d1,d1
+	add	d5,d1
+	asr	#2,d1		;sample *= 3/4
+.plot0_loop
+	moveq	#-$80,d3
+.plot1_loop
+	move.b	(a0)+,d2	;get sample
+	moveq	#512/8,d4
+	ext	d2
+	neg	d2
+	move	d2,d5
+	add	d2,d2
+	add	d5,d2
+	asr	#2,d2		;sample *= 3/4
+	move	d2,d5
+	lsl	#6,d5		;offset = sample * 64
+	sub	d2,d1
+	beq.b	.plot2_loop
+	subq	#1,d1
+	bge.b	.plot2_loop
+	not	d1
+	neg	d4
+	subq	#1,d1
+.plot2_loop
+	or.b	d3,(a2,d5)
+	add	d4,d5
+	dbf	d1,.plot2_loop
+	move	d2,d1
+	lsr.b	#1,d3
+	bne.b	.plot1_loop
+	addq.l	#1,a2
+	dbf	d0,.plot0_loop
+	rts
+
+
+;******	copy to ChipRAM
+.copy	move	#192-1,d3
+	move	.cpjmp(pc,d7*2),d2
+	jmp	.cpjmp(pc,d2)
+
+.cpjmp	dc.w	.cp01-.cpjmp
+	dc.w	.cp01-.cpjmp,.cp02-.cpjmp,.cp03-.cpjmp,.cp04-.cpjmp
+	dc.w	.cp05-.cpjmp,.cp06-.cpjmp,.cp07-.cpjmp,.cp08-.cpjmp
+	dc.w	.cp09-.cpjmp,.cp10-.cpjmp,.cp11-.cpjmp,.cp12-.cpjmp
+	dc.w	.cp13-.cpjmp,.cp14-.cpjmp,.cp15-.cpjmp,.cp16-.cpjmp
+.cp01
+.cp02
+.cp03
+.cp04
+.cp05
+.cp06
+.cp07
+.cp08	moveq	#(16-08)*4,d0
+	moveq	#(16-08)*4+16,d1
+.loop08	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop08
+	rts
+.cp09	moveq	#(16-09)*4,d0
+	moveq	#(16-09)*4+16,d1
+.loop09	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop09
+	rts
+.cp10	moveq	#(16-10)*4,d0
+	moveq	#(16-10)*4+16,d1
+.loop10	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop10
+	rts
+.cp11	moveq	#(16-11)*4,d0
+	moveq	#(16-11)*4+16,d1
+.loop11	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop11
+	rts
+.cp12	moveq	#(16-12)*4,d0
+	moveq	#(16-12)*4+16,d1
+.loop12	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop12
+	rts
+.cp13	moveq	#(16-13)*4,d0
+	moveq	#(16-13)*4+16,d1
+.loop13	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	move.l	(a0)+,(a1)+	;13
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop13
+	rts
+.cp14	moveq	#(16-14)*4,d0
+	moveq	#(16-14)*4+16,d1
+.loop14	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	move.l	(a0)+,(a1)+	;13
+	move.l	(a0)+,(a1)+	;14
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop14
+	rts
+.cp15	moveq	#(16-15)*4,d0
+	moveq	#(16-15)*4+16,d1
+.loop15	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	move.l	(a0)+,(a1)+	;13
+	move.l	(a0)+,(a1)+	;14
+	move.l	(a0)+,(a1)+	;15
+	add.l	d0,a0
+	add.l	d1,a1
+	dbf	d3,.loop15
+	rts
+.cp16	moveq	#(16-16)*4+16,d1
+.loop16	move.l	(a0)+,(a1)+	;01
+	move.l	(a0)+,(a1)+	;02
+	move.l	(a0)+,(a1)+	;03
+	move.l	(a0)+,(a1)+	;04
+	move.l	(a0)+,(a1)+	;05
+	move.l	(a0)+,(a1)+	;06
+	move.l	(a0)+,(a1)+	;07
+	move.l	(a0)+,(a1)+	;08
+	move.l	(a0)+,(a1)+	;09
+	move.l	(a0)+,(a1)+	;10
+	move.l	(a0)+,(a1)+	;11
+	move.l	(a0)+,(a1)+	;12
+	move.l	(a0)+,(a1)+	;13
+	move.l	(a0)+,(a1)+	;14
+	move.l	(a0)+,(a1)+	;15
+	move.l	(a0)+,(a1)+	;16
+	add.l	d1,a1
+	dbf	d3,.loop16
+	rts
+
+
+
+
+
+
+	section	smack2,bss
+	ds.b	1024	;safety...
+plot_fastbuf
+	ds.b	512/8*192
+	ds.b	512/8*192
+plot_fastbuf_end
+	ds.b	1024	;safety...
+
+spectrum_peaks
+	ds.w	512
+
+
+
+
+	END

@@ -1,0 +1,106 @@
+Short:  oscilloscope/analyzer for Delfina DSP
+Author: Smack/Infect! (Michael Henke)
+Type:   mus/misc
+
+ $VER: DelfScope 0.1 (Tue 03-Oct-2000)
+
+
+ #features
+   -reads audio data from Delfina input connector (external source)
+    or from a sound player program (AHI, DelfSF etc.)
+
+   -realtime displays:
+     - stereo level meter
+     - stereo oscilloscope
+     - spectrum analyzer
+
+   -can use any native Amiga screen mode (no CGFX support, sorry)
+
+   -free software (full source code included, of course)
+
+
+ #requirements
+   -CPU 68020+
+   -AmigaOS V37+
+   -Delfina DSP board
+
+   -developed on: A1200 (68030+882 @ 40MHz, 16MB Fast, Delfina1200 DSP)
+
+
+ #how to use it
+   Connect an external audio source (CD player, TV etc.) to your Delfina's
+   input or launch your favourite sound player program. Start DelfScope.
+   These options can be used:
+
+   MODEID   / -m    screen mode ID.
+                    if omitted a reqtools screenmode requester appears.
+                    specify a decimal or hexadecimal (prefix $ or 0x) value.
+                    (example: MULTISCAN:Productivity - 233508 or 0x39024)
+                    the visible screen size should be at least 640x480 pixels.
+                    NOTE: only native Amiga modes (ECS/AGA) are supported!
+
+   INPUT    / -i    name of the DelfModule to use as source.
+                    (default: "Connectors" - Delfina's input connector)
+                    here you can specify the name of the DelfModule that
+                    supplies DelfScope with input data. use the "listmod"
+                    command while you run a particular Delfina program to
+                    find out the name of its DelfModule. some examples are:
+                    "14Bit-NotePlayer" (AHI for DeliTracker by Chris Hodges),
+                    "DelFX", "DelfSF", "DelfAIFF", "DelfMPEG".
+                    NOTE: the names are case-sensitive!
+                    and unless you're a lucky owner of a Delfina Plus with
+                    128K memory / 74MHz DSP you will not be able to run
+                    DelfMPEG and DelfScope at the same time.
+
+   Use these keys on the DelfScope screen:
+
+   Esc      quit
+   Space    pause / continue
+   o        oscilloscope mode
+   s        spectrum analyzer mode
+   1...9    set redraw rate (lower=faster)
+   + -      increase / decrease input gain (for "Connectors" input only)
+
+
+ #technical stuff
+   -The width of the oscilloscope display depends on the vertical refresh
+    rate (fps). On slower screen modes (e.g. PAL - 50 Hz) the display is
+    wider so that all input data can be visualized.
+
+   -The spectrum analyzer employs a 1024-point FFT routine that runs on the
+    DSP (adapted from Motorola example sources).
+
+   -The plot routines (written in assembly language) are pretty simple and
+    use brute force in order to be fast. They only work with native screen
+    modes because they write directly into chip memory.
+    Anybody interested in better/more flexible plot routines? Then just
+    take my sources and modify them as you want.
+
+
+ #known problems
+   -DelfScope sometimes simply freezes my Amiga system, so don't work on
+    any precious data in the background - you have been warned!
+    This might be a "Delfina bug" of some kind, but currently I have no idea
+    how to solve this problem. :-(
+
+
+ #author
+   mailto: smack@smack.de
+
+   DelfScope - oscilloscope/analyzer for Delfina DSP
+   Copyright (C) 2000  Michael Henke
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+

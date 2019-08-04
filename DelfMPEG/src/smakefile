@@ -1,0 +1,18 @@
+
+DelfMPEG: DelfMPEG.o arexx.o PCM.o MP2.o MP3.o
+	sc link DelfMPEG.o arexx.o PCM.o MP2.o MP3.o to DelfMPEG
+
+DelfMPEG.o: DelfMPEG.c PCM.h MP2.h MP3.h
+	sc DelfMPEG.c
+
+arexx.o: arexx.c
+	sc arexx.c
+
+PCM.o: PCM.a56
+	a56 PCM.a56 object _DSP56K_PCM nolist
+
+MP2.o: MP2.a56
+	a56 MP2.a56 object _DSP56K_MP2 nolist
+
+MP3.o: MP3.a56
+	a56 MP3.a56 object _DSP56K_MP3 nolist

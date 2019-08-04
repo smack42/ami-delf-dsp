@@ -1,0 +1,229 @@
+
+;Delfina object DSP56K_ADPCM4
+;memory map (for Amiga access)
+;
+; prog
+;   0 .. init (x1=/, x0=/, y1=/, y0=/)
+;  +2 .. decode ADPCM4 data (x1=mono, x0=outbuf, y1=/, y0=/)
+;
+; xdata
+;   /
+;
+; ydata
+;   0 .. busy (Amiga read)
+;  +1 .. inbuf (Amiga write)
+
+
+
+
+DELFINA_SAMPLES	equ	2046
+
+
+	include 'delfequ.inc'
+
+	org	p:
+
+;->prog
+	jmp	init
+
+;->prog+2
+
+;*****************************************************************
+;
+; **** ADPCM4->PCM16 decoder ****
+;
+; designed to play files created by
+; AudioConvert V1.0 (c) Stephane TAVENARD
+;
+;
+; parameters
+;  x1 - mono          (mono: not_zero, stereo: zero)
+;  x0 - output buffer (mono: x: only,  stereo: x: left, y: right)
+;  y1 - /
+;  y0 - /
+;
+;
+; Delfina DSP coding by Smack/Infect!
+; (Mon 12-Jul-1999) - got my first DSP56K program working!
+; (Fri 23-Jul-1999) - optimized a little bit
+; (Wed 11-Aug-1999) - optimized further
+;                     (inline functions, adap_tab + diff_tab modulo access)
+;
+;*****************************************************************
+
+	move	x1,b			;b=mono
+	move	x0,r3			;r3=output buffer
+	move	x0,x:busy		;set #busy# to non-zero
+
+	move	#scale_tab,r1		;r1=scale_tab_l
+	move	r1,r2			;r2=scale_tab_r
+	move	x:adapl,n1		;n1=adap_l
+	move	x:adapr,n2		;n2=adap_r
+	move	#$7fff,r4		;r4=$7fff
+	move	#88,r5			;r5=88
+	move	#diff_tab,r6		;r6=diff_tab  !!  ALIGN 16
+	movec	#$000f,m6
+	move	#adap_tab,r7		;r7=adap_tab  !!  ALIGN 16
+	movec	#$000f,m7
+
+	tst	b	#inbuf,r0	;r0=input buffer
+	jeq	stereo
+
+;*** decode mono ***********************
+	move	y:(r0)+,y1		;y1=input
+	do	#DELFINA_SAMPLES/6,mono_loop_0
+	do	#6,mono_loop_1
+;decode_left
+	mpy	y1,#20,a
+	move	a0,y1			;y1=shifted to next 4bit input
+	move	a1,n6			;get 4bit code for table offset
+
+	move	y:(r1+n1),y0		;get scale
+	move	x:(r6+n6),x1		;get diff  !!  m6=$000f
+	move	x:pcml,b
+	macr	x1,y0,b	r4,a		;b=new pcm (raw)
+			;		;a=limit_high
+
+	cmp	a,b	n6,n7
+	tgt	a,b			;??b=limit_high??
+	neg	a	n1,x1		;x1=adap
+	cmp	a,b	#0,y0		;y0=0
+	tlt	a,b			;??b=limit_low??
+
+	move	x:(r7+n7),a		;!!  m7=$000f
+	add	x1,a	r5,x0		;a=new adap (raw)
+			;		;x0=limit_high
+	cmp	y0,a	b,x1
+	tlt	y0,a			;??a=limit_low??
+	cmp	x0,a	b,x:pcml
+	tgt	x0,a			;??a=limit_high??
+	move	a,n1			;n1=new adap
+
+	mpy	x1,#16,b		;scale 16bit->24bit
+	move	b0,x:(r3)+
+mono_loop_1
+	move	y:(r0)+,y1		;y1=input
+mono_loop_0
+	jmp	exit
+
+
+;*** decode stereo *********************
+stereo
+	move	y:(r0)+,y1		;y1=input
+	do	#DELFINA_SAMPLES/3,stereo_loop_0
+	do	#3,stereo_loop_1
+;decode_left
+	mpy	y1,#20,a
+	move	a0,y1			;y1=shifted to next 4bit input
+	move	a1,n6			;get 4bit code for table offset
+
+	move	y:(r1+n1),y0		;get scale
+	move	x:(r6+n6),x1		;get diff  !!  m6=$000f
+	move	x:pcml,b
+	macr	x1,y0,b	r4,a		;b=new pcm (raw)
+			;		;a=limit_high
+
+	cmp	a,b	n6,n7
+	tgt	a,b			;??b=limit_high??
+	neg	a	n1,x1		;x1=adap
+	cmp	a,b	#0,y0		;y0=0
+	tlt	a,b			;??b=limit_low??
+
+	move	x:(r7+n7),a		;!!  m7=$000f
+	add	x1,a	r5,x0		;a=new adap (raw)
+			;		;x0=limit_high
+	cmp	y0,a	b,x1
+	tlt	y0,a			;??a=limit_low??
+	cmp	x0,a	b,x:pcml
+	tgt	x0,a			;??a=limit_high??
+	move	a,n1			;n1=new adap
+
+	mpy	x1,#16,b		;scale 16bit->24bit
+	move	b0,x:(r3)
+;decode_right
+	mpy	y1,#20,a
+	move	a0,y1			;y1=shifted to next 4bit input
+	move	a1,n6			;get 4bit code for table offset
+
+	move	y:(r2+n2),y0		;get scale
+	move	x:(r6+n6),x1		;get diff  !!  m6=$000f
+	move	x:pcmr,b
+	macr	x1,y0,b	r4,a		;b=new pcm (raw)
+			;		;a=limit_high
+
+	cmp	a,b	n6,n7
+	tgt	a,b			;??b=limit_high??
+	neg	a	n2,x1		;x1=adap
+	cmp	a,b	#0,y0		;y0=0
+	tlt	a,b			;??b=limit_low??
+
+	move	x:(r7+n7),a		;!!  m7=$000f
+	add	x1,a	r5,x0		;a=new adap (raw)
+			;		;x0=limit_high
+	cmp	y0,a	b,x1
+	tlt	y0,a			;??a=limit_low??
+	cmp	x0,a	b,x:pcmr
+	tgt	x0,a			;??a=limit_high??
+	move	a,n2			;n2=new adap
+
+	mpy	x1,#16,b		;scale 16bit->24bit
+	move	b0,y:(r3)+
+stereo_loop_1
+	move	y:(r0)+,y1		;y1=input
+stereo_loop_0
+exit
+	move	n1,x:adapl
+	move	n2,x:adapr
+	move	#0,x0
+	move	x0,x:busy		;reset #busy# to zero
+	rts
+
+
+
+
+
+;*** initialize ************************
+init
+	move	#scale_tab_end,r0
+	move	#$7fffff,x1
+	move	#1/1.1,x0
+	move	x1,a
+	do	#89,precalc_loop
+	mpyr	x0,x1,a	a,y:-(r0)	;precalc scale_tab
+	move	a,x1
+precalc_loop
+	rts
+
+
+
+	org	x:
+	align	16
+
+adap_tab
+	dc	-1,-1,-1,-1,2,4,6,8
+	dc	-1,-1,-1,-1,2,4,6,8
+diff_tab
+	dc	 $001000, $003000, $005000, $007000
+	dc	 $009000, $00b000, $00d000, $00f000
+	dc	-$001000,-$003000,-$005000,-$007000
+	dc	-$009000,-$00b000,-$00d000,-$00f000
+
+pcml	dc	0
+pcmr	dc	0
+adapl	dc	0
+adapr	dc	0
+
+
+
+
+	org	y:
+
+;->ydata
+busy	dc	0
+
+;->ydata+1
+inbuf	ds	DELFINA_SAMPLES/3
+
+scale_tab
+	ds	89
+scale_tab_end

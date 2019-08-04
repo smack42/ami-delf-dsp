@@ -1,0 +1,138 @@
+
+;Delfina object DSP56K_PCM
+;memory map (for Amiga access)
+;
+; prog
+;   0 .. init (x1=mono, x0=/, y1=freq, y0=/)
+;  +2 .. mute (x1=/, x0=/, y1=/, y0=/)
+;  +4 .. DelfModule
+;
+; xdata
+;   /
+;
+; ydata
+;   0 .. amybuf (Amiga read)
+
+
+
+
+DELFINA_SAMPLES	equ	2046
+
+
+	include 'delfequ.inc'
+
+	org	p:
+
+int_key
+
+;->prog
+	jmp	init
+
+;->prog+2
+	jmp	mute
+
+
+;->prog+4
+
+;***********************************
+;* play routine
+;*
+;* r1=list of play buffers
+
+	move	y:(r1),r4		;r4=output buf
+	move	#rateconv,r3		;r3=rateconv structure
+	move	r4,r7			;r7=copy of r4
+	move	x:bufptr,r6		;r6=old bufptr
+
+	movec	#DELFINA_SAMPLES*2-1,m2 ;m2=input buffer mask
+	jsr	<delf_playrate		;rate conversion
+
+	move	y:mono,b
+	tst	b	r7,r0
+	jeq	not_mono
+
+	movec	#$ffff,m7
+	move	x:(r0)+,a
+	rep	#127
+	move	x:(r0)+,a	a,y:(r7)+
+	move	a,y:(r7)+
+not_mono
+
+; Double buffering. We compare old bufptr (in r6) and new bufptr (in r2).
+; If they are in different halves of the buffer then interrupt Amiga.
+	move	r6,y1			;y1=old pointer
+	move	y:buf2,b		;b= start of buf2
+	cmp	y1,b	r2,y0		;y0=new pointer
+	jle	dbuf_buf2
+	cmp	y0,b	y:buf1,x0
+	jgt	dbuf_skip
+dbuf_int
+	move	x0,y:amybuf		;tell amiga the new buffer
+	move	#int_key,a0
+	move	#causeqw,r0
+	jmp	<delf_causeq		;interrupt and exit
+dbuf_buf2
+	cmp	y0,b	b,x0
+	jgt	dbuf_int
+dbuf_skip
+	rts
+
+
+
+;***********************************
+;* init stuff
+;*
+;* x1=mono
+;* x0=/
+;* y1=freq
+;* y0=/
+init
+	move	#buf,x0
+	move	#DELFINA_SAMPLES,a
+	add	x0,a	x0,x:bufptr
+	move	x0,y:buf1
+	move	a,y:buf2
+	move	x1,y:mono
+	move	y1,x:freq
+
+	rts
+
+
+;***********************************
+;* clear current buffer (pause mode)
+;*
+;* x1=/
+;* x0=/
+;* y1=/
+;* y0=/
+mute
+	clr	a	y:amybuf,r0
+	move	a,x0
+	move	r0,r4
+	do	#DELFINA_SAMPLES,mute_loop	;interruptable
+	move	a,x:(r0)+	a,y:(r4)+
+mute_loop
+	rts
+
+
+
+
+	org	l:
+	align	4096		;must be >= DELFINA_SAMPLES*2
+buf	ds	DELFINA_SAMPLES*2
+
+
+	org	x:
+causeqw	dc	0,0
+rateconv
+freq	dc	0
+bufptr	dc	0
+	ds	4
+	
+	org	y:
+;->ydata
+amybuf	dc	0		;!!!! Amiga fills this buffer
+
+mono	dc	0		;playing in mono?
+buf1	dc	0		;buffer1
+buf2	dc	0		;buffer2 = buffer1 + DELFINA_SAMPLES

@@ -1,0 +1,123 @@
+Short:    sndfile player for Delfina DSP
+Author:   Smack/Infect! (Michael Henke)
+Type:     mus/play
+
+$VER: DelfSF 0.3 (Sat 17-May-2003)
+
+
+
+#features
+
+  -reads audio files using sndfile.library
+   (supports AIFF, WAV, IFF-8SVX, raw PCM and other file formats)
+
+  -direct Delfina playback for best performance + quality
+
+  -free software (full source code included, of course)
+
+
+
+#requirements
+
+  -CPU 68020+
+  -AmigaOS V37+
+  -Delfina DSP board
+  -sndfile.library  (Aminet: util/libs/sndfile.lha)
+
+  -developed on A1200 - OS3.1/68030+882@40MHz/16MBFastRAM/Delfina1200
+  -tested on various machines with Delfina 1200, Lite, Plus or Flipper
+
+
+
+#recommended
+
+  -reqtools.library V38+
+  -some audio files :)
+
+
+
+#changes since previous release
+
+  -fixed interference with serial I/O (interrupt timing problem)
+
+
+
+#how to use
+
+  DelfSF is a shell-only program.  The following options can be used:
+
+  FILES ......... -one or more filenames.
+                  -if omitted a reqtools file requester appears.
+
+  NOPLAY/-n ..... -don't play but just output some information.
+                  -this works also without a Delfina board.
+
+  NOTIMER/-nt ... -suppress output of the position timer during playback.
+                   (recommended for playing background music while you are
+                   using other programs)
+
+  VOLUME/-vol <number>  (default: 100)
+                  -set the playback volume (in per cent, range 0...200).
+                  -WARNING: can degrade playback quality!
+                   if the volume is boosted (101...200) there could be
+                   distortions caused by output clipping.
+
+  RATE/-r <number>  (default: 44100)
+  -raw-           -set the playback rate in Hz (raw files only).
+
+  BITS/-b <number>  (default: 16)
+  -raw-           -set the number of bits per sample (raw files only).
+
+  CHANNELS/-c <number>  (default: 2)
+  -raw-           -set the number of channels (raw files only).
+
+  BYTESWAP/-bs  (default: false)
+  -raw-           -set the sample format to 'little endian' (raw files only).
+                   try this if your 16bit (CDDA) files sound like static.
+
+  note: raw files will only be played if at least one of the raw file options
+  (RATE, BITS, CHANNELS, BYTESWAP) is specified, in order to avoid accidental
+  playback of non-audio files which could be very noisy.
+
+  During playback these keys can be used:
+
+  Ctrl-F   fast forward
+  Ctrl-E   pause/continue
+  Ctrl-C   stop current file, start next file
+  Ctrl-D   quit program
+
+
+
+#technical stuff
+
+  -The source code of DelfSF is split into two parts: the main part contains
+   all the generic stuff (file requester, sndfile.library calls, buffering)
+   while the Delfina-specific code is situated in a separate part.
+   This should make it fairly easy to write a player for other output devices
+   (e.g. Amiga native, sound boards, AHI), recycling the main part of DelfSF
+   and only replacing its Delfina part. Feel free to contact me if you have
+   any comments, suggestions or need some help concerning the code.
+
+
+
+#author
+
+  mailto: smack42@web.de
+
+  DelfSF - sndfile player for Delfina DSP
+  Copyright (C) 2000-2003  Michael Henke
+
+  This program is free software; you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation; either version 2 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+

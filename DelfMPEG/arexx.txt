@@ -1,0 +1,93 @@
+DelfMPEG 0.6 ARexx doc
+(Thu 27-Jul-2000)
+
+
+DelfMPEG can operate in two different modes:
+-interactive mode
+  (play files that were specified by the FILES command line option or
+  selected using the reqtools requester)
+-ARexx mode
+  (activated by the AREXX command line option; the program is controlled
+  via the ARexx commands listed below)
+
+
+To get DelfMPEG into ARexx mode just specify the AREXX command line option,
+together with the other options you want to use.
+Only one instance of DelfMPEG can run in ARexx mode at the same time.
+
+examples:
+DelfMPEG AREXX VERBOSE SHOWTAG
+  (gives you a lot of output, including all received ARexx commands)
+
+DelfMPEG >NIL: AREXX SHOWTAG
+  (no output at all)
+
+
+
+ARexx commands  -  port name 'DELFMPEG'
+
+
+
+QUIT
+    quit program
+
+PLAY <filename>
+    play the specified file; this command only works if the player had been
+    stopped before, during playback the PLAY command is simply ignored
+
+STOP
+    stop playback; it's usually a good idea to use STOP before PLAY
+
+PAUSE
+    pause playback; can also be used before PLAY command (when the player is
+    stopped), the next PLAY will initialize the file reader without starting
+    playback, you can use the GET... commands to get some file info and later
+    use CONTINUE to start playback
+
+CONTINUE
+    continue playback after PAUSE command
+
+SETVOLUME <number>
+    set playback volume (in per cent; range 0...200)
+    this command always works, even before PLAY; please note that values
+    higher than 100 might cause distortions due to output clipping (you'd
+    better use the controls of your amplifier to boost the volume)
+
+SETPOSITION <seconds>
+    set playback position inside the file that's currently playing; this
+    command works in PLAY and PAUSE mode, but not in STOP mode
+    **NOTE: this doesn't work if the STRICT command line option is specified!
+
+GETSTATUS
+    get program status code:
+    0  - player stopped (after STOP command or when playback is finished)
+    1  - playing (after PLAY and/or CONTINUE command)
+    2  - player paused (after PAUSE command)
+    10 - error: initDelfina failed
+    20 - error: file not found
+    30 - error: file not recognized as MPEG1 audio
+    (if an error occurs then the player automatically returns to STOP mode)
+
+GETFILENAME
+    get file name (was set by a PLAY command before)
+
+GETFILETYPE
+    get file type information (MPEG layer, bit rate, sampling rate, channels);
+    this is the same string that DelfMPEG also prints to stdout
+
+GETDURATION
+    get total playback duration of the file (in seconds)
+
+GETPOSITION
+    get current playback position in the file (in seconds)
+    **NOTE: this doesn't work if the NOTIMER command line option is specified!
+
+GETTITLE
+GETARTIST
+GETALBUM
+GETCOMMENT
+GETYEAR
+GETGENRE
+    get ID3v1 tag information; the returned strings will be empty if the info
+    is not available; GETGENRE returns the genre number (e.g. 17 for 'Rock')
+    **NOTE: you need to specify the SHOWTAG command line option for this!

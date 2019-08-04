@@ -1,0 +1,19 @@
+/** DelfMPEG ARexx test **/
+
+/* usage: rx vol <volume> */
+
+PARSE ARG volume
+ADDRESS DELFMPEG
+OPTIONS RESULTS
+
+if volume=='' then do
+    say 'missing parameter <volume>'
+    return 20
+end
+
+if ((volume<0) | (volume>200)) then do
+    say 'invalid value for parameter <volume> (must be 0...200)'
+    return 20
+end
+
+SETVOLUME volume
