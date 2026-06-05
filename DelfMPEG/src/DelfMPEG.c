@@ -24,14 +24,14 @@
 #include <proto/dos.h>
 #include <clib/asyncio_protos.h>
 #include <proto/timer.h>
-#include <proto/reqtools.h>
+#include <proto/asl.h>
 #include <exec/interrupts.h>
 #include <exec/execbase.h>
 #include <exec/memory.h>
 #include <exec/libraries.h>
 #include <libraries/asyncio.h>
 #include <devices/timer.h>
-#include <libraries/reqtools.h>
+#include <libraries/asl.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
@@ -118,12 +118,12 @@ extern struct DelfObj DSP56K_MP3;
 extern struct ExecBase *SysBase;
 struct Library *DelfinaBase=NULL;
 struct Library *TimerBase=NULL;
-struct ReqToolsBase *ReqToolsBase=NULL;
+struct Library *AslBase=NULL;
 
 struct AsyncFile *file, *outfile=NULL;
 struct FileInfoBlock *fib=NULL;
 struct TagItem tag_done={TAG_DONE};
-UBYTE rtfilename[128]={0}, *outfilename=NULL;
+UBYTE *outfilename=NULL;
 struct Task *mytask;
 ULONG bytes_total, bytes_loaded, buffers_filled, buffers_missed, write_buffers_filled;
 ULONG prevheader, currheader, frames_loaded, frames_played;
@@ -720,13 +720,13 @@ void setPosition(ULONG seconds)     /*** WARNING: quick & dirty hack !! ***/
 int main(void)
 {
     struct RDArgs *rdargs;
-    LONG args[17]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, r1, i, taskpri, outintel=0;
+    LONG args[17]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, r1, i, taskpri=0, outintel=0;
     UBYTE **files_pt, *filename;
     double duration, duration2;
     ULONG sigs, minutes, seconds, millisec, curr_print_pos, prev_print_pos;
     struct timeval time1,time2;
-    struct rtFileRequester *rtfilereq=NULL;
-    struct rtFileList *rtfilelist=NULL, *rtfilelist_curr=NULL;
+    struct FileRequester *aslfilereq=NULL;
+    LONG aslfileindex=0;
     BPTR lock_newdir=NULL, lock_olddir=NULL;
 
     /*
@@ -878,14 +878,18 @@ int main(void)
 
     /*
     **
-    ** reqtools filerequester if no files specified **
+    ** ASL filerequester if no files specified **
     **
     */
     if(!files_pt && !rexxmode)
     {
-        if((ReqToolsBase=(struct ReqToolsBase*)OpenLibrary("reqtools.library",38)))
+        if((AslBase=OpenLibrary(AslName, 37)))
         {
-            if(!(rtfilereq=rtAllocRequest(RT_FILEREQ,NULL)))
+            if(!(aslfilereq=(struct FileRequester*) AllocAslRequestTags(
+                ASL_FileRequest,
+                ASL_Hail, (ULONG)"DelfMPEG: play MPEG audio files",
+                ASL_FuncFlags, FILF_MULTISELECT | FILF_PATGAD,
+                TAG_DONE)))
             {
                 rc=10;
                 goto exit_clean;
@@ -902,18 +906,14 @@ int main(void)
     pause=1; rexxerror=0;   /* initialize */
 
 next_filereq:
-    if(rtfilereq)
+    if(aslfilereq)
     {
-        rtfilelist=rtFileRequest( rtfilereq, &rtfilename[0],
-                                  "DelfMPEG: select MPEG audio files",
-                                  RTFI_Flags, FREQF_MULTISELECT|FREQF_PATGAD,
-                                  TAG_DONE );
-        if(rtfilelist)
+        if(AslRequest(aslfilereq, NULL))
         {
-            rtfilelist_curr=rtfilelist;
-            if(rtfilereq->Dir)
+            aslfileindex=0;
+            if(aslfilereq->rf_Dir)
             {
-                lock_newdir=Lock(rtfilereq->Dir,SHARED_LOCK);
+                lock_newdir=Lock(aslfilereq->rf_Dir,SHARED_LOCK);
                 lock_olddir=CurrentDir(lock_newdir);
             }
         }
@@ -976,14 +976,18 @@ next_file:
                 goto next_file;
             }
         }
-        else if(rtfilelist)
+        else if(aslfilereq)
         {
-            if(rtfilelist_curr)
+            if (aslfileindex == 0 && aslfilereq->rf_NumArgs == 0)
             {
-                filename=rtfilelist_curr->Name;
-                rtfilelist_curr=rtfilelist_curr->Next;
+                filename = aslfilereq->rf_File;
+            }
+            else if (aslfileindex < aslfilereq->rf_NumArgs)
+            {
+                filename = aslfilereq->rf_ArgList[aslfileindex].wa_Name;
             }
             else filename=NULL;
+            ++aslfileindex;
         }
         else filename=(*files_pt++);
 
@@ -1397,11 +1401,10 @@ next_file:
         }
         playlist_in_use=0;
     }
-    if(rtfilelist)
+    if(aslfilereq)
     {
         if(lock_olddir) { CurrentDir(lock_olddir); lock_olddir=NULL; }
         if(lock_newdir) { UnLock(lock_newdir); lock_newdir=NULL; }
-        rtFreeFileList(rtfilelist); rtfilelist=NULL;
         if(ende<2) goto next_filereq;
     }
     if(rexxmode && (ende<2)) goto next_rexxloop;
@@ -1413,8 +1416,8 @@ exit_clean:
     if(framebuf0) FreeMem((APTR)framebuf0,framebuf0size);
     if(savebuf0) FreeMem((APTR)savebuf0,DEFAULT_OUTFILE_FRAMEBUF*(LONG)sizeof(struct savebuf));
     if(fib) FreeDosObject(DOS_FIB,fib);
-    if(rtfilereq) rtFreeRequest(rtfilereq);
-    if(ReqToolsBase) CloseLibrary((struct Library*)ReqToolsBase);
+    if(aslfilereq) FreeAslRequest(aslfilereq);
+    if(AslBase) CloseLibrary(AslBase);
     if(DelfinaBase) CloseLibrary(DelfinaBase);
     return(rc);
 }
