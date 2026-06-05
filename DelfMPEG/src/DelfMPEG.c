@@ -22,7 +22,7 @@
 
 #include <proto/exec.h>
 #include <proto/dos.h>
-#include <proto/asyncio.h>
+#include <clib/asyncio_protos.h>
 #include <proto/timer.h>
 #include <proto/reqtools.h>
 #include <exec/interrupts.h>
@@ -117,7 +117,6 @@ extern struct DelfObj DSP56K_MP3;
 
 extern struct ExecBase *SysBase;
 struct Library *DelfinaBase=NULL;
-struct Library *AsyncIOBase=NULL;
 struct Library *TimerBase=NULL;
 struct ReqToolsBase *ReqToolsBase=NULL;
 
@@ -811,11 +810,6 @@ int main(void)
                    (Delf_AvailMem(DMEMF_PROG|DMEMF_TOTAL)+Delf_AvailMem(DMEMF_YDATA|DMEMF_TOTAL)+1023)>>10,
                    delfina_dspclock );
     }
-    if (!(AsyncIOBase=OpenLibrary("asyncio.library",39))) {
-        printf("**unable to open asyncio.library V39\n");
-        rc=20;
-        goto exit_clean;
-    }
     TimerBase=(struct Library*)FindName(&SysBase->DeviceList,"timer.device");
     mytask=FindTask(NULL);
     if(!(fib=AllocDosObject(DOS_FIB,&tag_done)))
@@ -1421,7 +1415,6 @@ exit_clean:
     if(fib) FreeDosObject(DOS_FIB,fib);
     if(rtfilereq) rtFreeRequest(rtfilereq);
     if(ReqToolsBase) CloseLibrary((struct Library*)ReqToolsBase);
-    if(AsyncIOBase) CloseLibrary(AsyncIOBase);
     if(DelfinaBase) CloseLibrary(DelfinaBase);
     return(rc);
 }

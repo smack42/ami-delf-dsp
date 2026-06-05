@@ -1,6 +1,6 @@
 
 DelfMPEG: DelfMPEG.o arexx.o PCM.o MP2.o MP3.o
-	sc link DelfMPEG.o arexx.o PCM.o MP2.o MP3.o to DelfMPEG
+	sc link DelfMPEG.o arexx.o PCM.o MP2.o MP3.o lib:asyncio.lib to DelfMPEG
 
 DelfMPEG.o: DelfMPEG.c PCM.h MP2.h MP3.h
 	sc DelfMPEG.c
@@ -16,3 +16,6 @@ MP2.o: MP2.a56
 
 MP3.o: MP3.a56
 	a56 MP3.a56 object _DSP56K_MP3 nolist
+
+clean:
+	-delete \#?.o \#?.lnk DelfMPEG
