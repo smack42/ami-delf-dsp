@@ -96,7 +96,7 @@
 	jsr	getbits_init
 
 ; WARNING:
-; the active 'getbits' routine occupies these registers: r5, r6, r7, b
+; the active 'getbits' routine occupies these registers: r5+n5, r6, r7, b
 ; (their contents must not be changed!!)
 ;
 ; 'getbits' is used in the bitstream processing routines:
@@ -337,6 +337,7 @@ read_sf_loop0
 ;*****************************************************************************
 ;*** read huffman
 ;*****************************************************************************
+; here we can use register r6, because getbit1 is implemented inline
 	move	x:si_tab_p,r1
 	move	#<blocktype-si0,n1
 	move	x:(r1),r1		;r1=si_struct			!! r1
@@ -384,13 +385,13 @@ huff_region012
 	move	x:(r0+n0),n2		;n2=linbits
 	move	#>htabs,r0
 	move	r1,n1			;save r1
-	move	x:(r0+n0),n5		;n5=htab
+	move	x:(r0+n0),n6		;n6=htab
 	move	#>huff_dec012_end,r6	;r6=huff_dec012_end
 	move	#>huff_dec012_gb_ne1,r2	;r2=huff_dec012_gb_ne1
 	move	#<$10,y1		;y1=#$100000 - shift 3 bits	!! y1
 
 	do	n3,huff_loop012
-	move	n5,r0			;tab
+	move	n6,r0			;tab
 ;---faster huffman decoder
 ;-based on the assumption that the overhead for "do/enddo" pays off
 ;-when the loop is taken several times (more than twice?)
@@ -556,7 +557,7 @@ huff_loop3
 huff_region3_end
 
 ; from now on we can use all registers again
-; because 'getbits' is no longer active (r5, r6, r7, b)
+; because 'getbits' is no longer active (r5+n5, r6, r7, b)
 
 ;set the remaining samples to zero
 	move		#>576,y0	;y0=576 !!
@@ -1801,30 +1802,18 @@ synth_window_end
 ;		** 21 words
 
 
-getbits_init
-	clr	b	r7,x:getbits_stream
-	move	b,x:getbits_count
-	move	#<$80,b			;end marker
-	move	b,x:getbits_temp
-getbits_continue
-	move	x:getbits_p,r5		;getbits(n7) -> jsr (r5)
-	clr	b	x:getbit1_p,r6	;getbit1()   -> jsr (r6)
-	move	x:getbits_stream,r7	;!! DO NOT TOUCH !!
-	move	x:getbits_temp,b1	;!! DO NOT TOUCH !!
-	move	x:getbits_count,b0	;!! DO NOT TOUCH !!
+getbits_init	; r7 = input bitstream in X mem
+	move		#<$40,b		;b1=end marker, b0=bit counter
+	lsl	b	#getbits,r5	;getbits(n7) -> jsr (r5)
+	move		#<getbits_ne-getbits,n5
+	move		#getbit1,r6	;getbit1()   -> jsr (r6)
 	rts
 
-getbits_pause
-	move	r7,x:getbits_stream
-	move	b1,x:getbits_temp
-	move	b0,x:getbits_count
-	rts
-
-getbits__
+getbits		; r5 = getbits, n5 = getbits_ne - getbits
 	do	n7,getbits_loop		;n7=number_of_bits
 	inc	b			;b0=b0+1  (increment bit counter)
-	lsl	b			;b1=b1<<1 (new CARRY bit)
-	jne	getbits_ne
+	lsl	b	(r5)+n5		;b1=b1<<1 (new CARRY bit)
+	jne	(r5)-n5			;getbits_ne
 	move	x:(r7)+,b1		;fetch next 24 bits
 	rol	b			;b1=b1<<1, append end marker
 getbits_ne
@@ -1832,7 +1821,7 @@ getbits_ne
 getbits_loop
 	rts
 
-getbit1__
+getbit1
 	inc	b			;b0=b0+1  (increment bit counter)
 	lsl	b	#<0,a		;b1=b1<<1 (new CARRY bit)
 	jne	getbit1_ne
@@ -2009,13 +1998,6 @@ xr1		ds	576
 xr_p		ds	1
 xr_zero_p	ds	1
 
-
-;	dc	"***getbit***"
-getbits_p		dc	getbits__
-getbit1_p		dc	getbit1__
-getbits_stream		ds	1
-getbits_temp		ds	1
-getbits_count		ds	1
 
 mono			ds	1
 channels		ds	1
