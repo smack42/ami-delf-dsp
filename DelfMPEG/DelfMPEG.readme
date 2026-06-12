@@ -125,7 +125,7 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
                   -set the size of the AsyncIO buffer (in Kbytes).
                    (large IO-buffers = faster reading from disk)
 
-  FFSKIP/-ff <number>   (default: 10)
+  FFSKIP/-ff <number>   (default: 40)
                   -set the number of frames that are skipped during fast
                    forward mode, i.e. when Ctrl-F is pressed
 

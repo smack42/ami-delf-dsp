@@ -44,7 +44,7 @@ static UBYTE template[]=
 
 #define DEFAULT_FRAMEBUF    100
 #define DEFAULT_ASYNCBUF    128
-#define DEFAULT_FFSKIP      10
+#define DEFAULT_FFSKIP      40  /* about one second */
 #define DEFAULT_OUTFILE_ASYNCBUF 256
 #define DEFAULT_OUTFILE_FRAMEBUF 40
 
