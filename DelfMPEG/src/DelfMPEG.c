@@ -85,7 +85,7 @@ static UWORD mpg_sblimit[4]={27,30,8,12};
 static ULONG ID3v1_TAG;
 UBYTE ID3v1_buffer[142];
 
-/** static LONG pow43tab[8206]; **/
+/** static UBYTE pow43tab[8207*3]; **/
 #include "MP3_pow43tab.h"
 
 static UWORD bitres_offset, bitres_ok;
@@ -393,7 +393,7 @@ int InitDelfina(void)
                 return(0);
             }
             Delf_CopyMem(pow43tab, (void*)(prg_mp3->ydata+DATY_MP3_POW43TAB),
-                         8206*4, DCPF_FROM_AMY|DCPF_YDATA|DCPF_32BIT);
+                         8207*3, DCPF_FROM_AMY|DCPF_YDATA|DCPF_24BIT);
             Delf_Run(prg_mp3->prog+PROG_MP3_INIT, 0, 0,
                      mem_il_mp3, mem_ip_mp3,
                      (ULONG)curr_play->freq,

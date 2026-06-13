@@ -34,7 +34,7 @@
 ; ydata
 ;  +16 .. busy (Amiga read only, TRUE (NON-ZERO) if decoder is running)
 ;  +17 .. forcemono (Amiga write)
-;  +18 .. pow43tab (8206 words; precalculated by main prog)
+;  +18 .. pow43tab (8207 words; precalculated by main prog)
 ;
 	include 'delfequ.inc'
 
@@ -2574,7 +2574,7 @@ forcemono
 
 ;->ydata+18
 pow43tab
-	ds	8206		;comes from main prog (see 'MP3_pow43tab.h')
+	ds	8207		;comes from main prog (see 'MP3_pow43tab.h')
 
 ;	dc	"**prev0**"
 hybrid_prev0		ds	576
