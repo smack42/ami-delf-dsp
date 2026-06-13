@@ -470,17 +470,19 @@ huff_region012_end
 	move	#>htabs,r0
 	move	x:(r1+n1),n0		;si.tabsel3
 	jle	huff_region3_end	;--> skip ( because regionend2>=576 )
-	move	x:(r0+n0),n1		;n1=htab
-	move	a,x0	y:pow43tab+1,a
+	move	x:(r0+n0),y1		;y1=htab			!! y1
+	move	a,x0	y:pow43tab+1,a	;x0=loop count
 	neg	a	a,n2		;n2= pow43tab[1]		!! n2
-	tfr	x0,a	a,y0		;y0=-pow43tab[1]		!! y0
-	move	#>huff_dec3,r1
+	move		a,y0		;y0=-pow43tab[1]		!! y0
+	move		#htab00,a	;huffman table having only one ZERO
+	cmp	y1,a	#>huff_dec3,r1
+	jeq	huff_region3_end	;--> skip ( because htab is empty )
 	move	#>huff_dec3_gb_ne0,r5
 
 
-	do	a,huff_loop3
+	do	x0,huff_loop3
 	move	b0,a			;bit counter
-	cmp	x1,a	n1,r0		;tab
+	cmp	x1,a	y1,r0		;tab
 	jmi	huff_dec3_start		;while(huffbit<si.grend)
 	enddo
 	jmp	huff_loop3
