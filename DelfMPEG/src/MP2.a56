@@ -777,13 +777,19 @@ synth_unscramble
 
 
 ;	** finally: write audio data to output buffer
+;	** with rounding from 24 to 16 bits
 	move	x:synth_out_p,r4
 	move	x:synth_pcm64_p,r0
 	move	#<31,n0
+	move	#>$008000,y0			;shift right by 8 bits
+	move	#>$000080,x0			;shift right by 16 bits
 	do	#32,synth_out_loop
-	move	x:(r0)+,x1
-	move			x:(r0+n0),x0
-	move			x,l:(r4)+
+	move			x:(r0)+,x1
+	mpyr	x1,y0,b		x:(r0+n0),x1	;round to 16 bits
+	mpyr	x1,y0,b		b,x1		;round to 16 bits
+	mpy	x1,x0,b		b,x1		;shift to high bits
+	mpy	x1,x0,b		b0,x:(r4)	;shift to high bits
+	move			b0,y:(r4)+
 synth_out_loop
 	move	r4,x:synth_out_p
 
@@ -795,14 +801,14 @@ synth_out_loop
 	add	x0,a		x:synth_audio_delta,n0
 	move	a,x:synth_imfct_fraction_p
 	move	(r0)-n0
-	movec	x:synth_audio_mask,m0
+	movec	x:synth_audio_mask,m0	;modulo addressing
 
 	move	x:decode_tr3_count,a
 
 	sub	x0,a	(r0)-n0
 	move	a,x:decode_tr3_count
 
-	movec	#$ffff,m0
+	movec	m7,m0			;linear addressing
 	tst	a	r0,x:synth_audio_p
 	jne	synth_tr_loop_head
 
