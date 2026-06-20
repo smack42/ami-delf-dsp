@@ -154,7 +154,8 @@ clear_loop
 ;	** getbits_init
 	move	x:getbits_stream_p,r7
 	move	#getbits_temp,r6
-	move	x:decoder_getbits_loop_p,r5
+	move	#getbits__,r5
+	move	#<getbits_ne-getbits__,n5
 
 ;	**
 ;	** fetch bit allocation table
@@ -257,7 +258,7 @@ sf_loop1
 
 	move	b1,x:(r6)
 
-;	** getbits_exit
+;	** getbits_exit r5,n5 r6
 	move	r7,x:getbits_stream_p
 
 
@@ -340,7 +341,8 @@ decode_samples
 ;	** getbits_init
 	move	x:getbits_stream_p,r7
 	move	#getbits_temp,r6
-	move	x:decoder_getbits_loop_p,r5
+	move	#getbits__,r5
+	move	#<getbits_ne-getbits__,n5
 
 
 
@@ -518,7 +520,7 @@ ds_ch_loop
 	move	(r2)+n2		; update next to quantization
 	jmp	ds_sb_loop_head
 ds_sb_loop
-;	** getbits_exit
+;	** getbits_exit r5,n5 r6
 	move	r7,x:getbits_stream_p
 
 
@@ -864,19 +866,17 @@ synth_unscramble_help
 
 
 
-getbits_loop_start
+getbits__
+; r5 = getbits__ ; n5 = getbits_ne - getbits__
 	do	n7,getbits_loop
-	lsl	b			;b1=b1<<1 (new CARRY bit)
-	jne	getbits_ne		;(patch for short jump)
-getbits_cp
+	lsl	b	(r5)+n5		;b1=b1<<1 (new CARRY bit)
+	jne	(r5)-n5			;getbits_ne
 	move	x:(r7)+,b1		;fetch next 24 bits
 	rol	b			;b1=b1<<1, append end marker
 getbits_ne
 	rol	a			;get CARRY bit, set condition code ZERO
 getbits_loop
 	rts
-getbits_loop_end
-;		** 9 words (8 words with 'jne' short jump)
 
 
 
@@ -1038,7 +1038,6 @@ jsbound		ds	1
 
 getbits_stream_p	ds	1
 getbits_temp		ds	1
-decoder_getbits_loop_p	dc	getbits_loop_start
 
 decode_rts_p		ds	1
 decode_ds_sblimit_count	ds	1
