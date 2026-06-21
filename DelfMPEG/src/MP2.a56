@@ -778,12 +778,16 @@ synth_unscramble
 	move	x:synth_out_p,r4
 	move	x:synth_pcm64_p,r0
 	move	#<31,n0
-	move	#>$008000,y0			;shift right by 8 bits
+	move	#>$007fff,y0			;positive 16-bit limit
 	move	#>$000080,x0			;shift right by 16 bits
 	do	#32,synth_out_loop
 	move			x:(r0)+,x1
-	mpyr	x1,y0,b		x:(r0+n0),x1	;round to 16 bits
-	mpyr	x1,y0,b		b,x1		;round to 16 bits
+	mpyr	x1,#8,a				;round to 16 bits
+	cmp	y0,a		x:(r0+n0),x1
+	tgt	y0,a				;prevent overflow
+	mpyr	x1,#8,b				;round to 16 bits
+	cmp	y0,b		a,x1
+	tgt	y0,b				;prevent overflow
 	mpy	x1,x0,b		b,x1		;shift to high bits
 	mpy	x1,x0,b		b0,x:(r4)	;shift to high bits
 	move			b0,y:(r4)+
@@ -1079,7 +1083,7 @@ synth_pcm64_slow	ds	64
 busy		dc	0
 forcemono	dc	0
 
-synth_tab_window
+synth_tab_window	; all values are divided by two
 	dc	$000000,$fff8c1,$003540,$ff8d41,$01fd40,$faf7c1,$066b80,$db63c1
 	dc	$494780,$249c40,$066b80,$050840,$01fd40,$0072c0,$003540,$000740
 	dc	$ffffc1,$fff841,$003680,$ff7e41,$01f400,$fa9cc1,$05d1c0,$d99601
