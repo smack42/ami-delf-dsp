@@ -859,6 +859,14 @@ int main(void)
 
     if((outfilename!=NULL) && (outfilename[0]!=0)) /* non-empty string */
     {
+        BPTR of = Open(outfilename, MODE_OLDFILE);
+        if (of != 0)
+        {
+            Close(of);
+            printf("**output file already exists: %s\n", outfilename);
+            rc = 20;
+            goto exit_clean;
+        }
         if(!(outfile=OpenAsync(outfilename,MODE_WRITE,DEFAULT_OUTFILE_ASYNCBUF*1024)))
         {
             printf("**unable to open output file: %s\n",outfilename);

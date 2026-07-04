@@ -68,7 +68,6 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
 
   OUTFILE/-o <filename>
                   -write decoded data to this file (no playback).
-                  -the output file will be overwritten without warning!
                   -output file format: raw PCM (no AIFF or WAV header),
                    16 bits per sample (big endian),
                    number of channels (1=mono or 2=stereo) and sampling
