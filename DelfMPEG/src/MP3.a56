@@ -216,11 +216,9 @@ read_grsi_block0e
 	clr	a	a,x:(r0)+	;si.preflag
 	jsr	(r6)			;getbit1
 	move	#>1,y0
-	add	y0,a	#>32,y0
+	add	y0,a
 	clr	a	a,x:(r0)+	;si.sfshift + 1 !!!!
 	jsr	(r6)			;getbit1
-	move	#<33,a1			;33
-	teq	y0,a			;32
 	move		a1,x:(r0)+	;si.tabsel3
 
 read_grsi_loop
@@ -330,6 +328,7 @@ read_sf_loop0
 	clr	a	r1,x:sfsi_p
 	move	a,x:(r3)+
 	move	a,x:(r3)+
+	move	x:si_tab_p,r1
 	move	a,x:(r3)+
 
 
@@ -338,18 +337,17 @@ read_sf_loop0
 ;*** read huffman
 ;*****************************************************************************
 ; here we can use register r6, because getbit1 is implemented inline
-	move	x:si_tab_p,r1
-	move	#<blocktype-si0,n1
+;	move	x:si_tab_p,r1		;moved up ^
 	move	x:(r1),r1		;r1=si_struct			!! r1
 
 ;****** read region0
 	move	#<regionend0-si0,n1
 	move	x:xr_p,r3		;r3=xr (output)
 	move	#>pow43tab,r4		;r4=pow43tab
+	move	#>15,x1			;x1=#15				!! x1
+	move	#<$10,y1		;y1=#$100000 = shift 3 bits	!! y1
 	move	x:(r1+n1),a		;si.regionend0
-	asr	a	#<tabsel0-si0,n1
-	move	a,n3			;n3=loop_count
-	tst	a	x:(r1+n1),n0	;si.tabsel0
+	asr	a	#<tabsel0-si0,n1;a=loop_count
 	jsgt	huff_region012
 ;****** read region1
 	move	#<regionend0-si0,n1
@@ -358,10 +356,8 @@ read_sf_loop0
 	move	#<regionend1-si0,n1
 	nop
 	move	x:(r1+n1),a		;si.regionend1
-	sub	x0,a
-	asr	a	#<tabsel1-si0,n1
-	move	a,n3			;n3=loop_count
-	tst	a	x:(r1+n1),n0	;si.tabsel1
+	sub	x0,a	#<tabsel1-si0,n1
+	asr	a			;a=loop_count
 	jsgt	huff_region012
 ;****** read region2
 	move	#<regionend1-si0,n1
@@ -370,91 +366,339 @@ read_sf_loop0
 	move	#<regionend2-si0,n1
 	nop
 	move	x:(r1+n1),a		;si.regionend2
-	sub	x0,a
-	asr	a	#<tabsel2-si0,n1
-	move	a,n3			;n3=loop_count
-	tst	a	x:(r1+n1),n0	;si.tabsel2
+	sub	x0,a	#<tabsel2-si0,n1
+	asr	a			;a=loop_count
 	jsgt	huff_region012
 
 	jmp	huff_region012_end
 
 ;--vv-------------------------------vv--
 huff_region012
-	move	#>htablinbits,r0
-	move	#>15,x1			;x1=#15				!! x1
-	move	x:(r0+n0),n2		;n2=linbits
+	move	x:(r1+n1),n0		;si.tabsel0 tabsel1 tabsel2
 	move	#>htabs,r0
 	move	r1,n1			;save r1
-	move	x:(r0+n0),n6		;n6=htab
-	move	#>huff_dec012_end,r6	;r6=huff_dec012_end
-	move	#>huff_dec012_gb_ne1,r2	;r2=huff_dec012_gb_ne1
-	move	#<$10,y1		;y1=#$100000 - shift 3 bits	!! y1
+	move	(r0)+n0
+	move	(r0)+n0
+	move	(r0)+n0			;tabsel * 3
+	move	x:(r0)+,r2		;function
+	move	x:(r0)+,n7		;n7=linbits (for getbits)
+	jmp	(r2)			;jump to function
 
-	do	n3,huff_loop012
+
+; this function handles "empty" tables
+; it doesn't read any input bits and writes zero values only
+huff_r012_empty
+	lsl	a	#<0,x0
+	do	a,huff_r012_empty_loop
+	move	x0,x:(r3)+
+huff_r012_empty_loop
+	rts
+
+
+; this function handles tables that have
+; - no single-bit Zero; code length 2...n (optimized for two-bit codes)
+; - no linbits
+huff_r012_notzero
+	move	x:(r0),n6		;n6=htab
+	move	#>huff_r012_notzero_gb_ne9,r2
+	move	#>huff_r012_notzero_dec_end,r6
+	; we don't use getbits here, so we can repurpose r5 and n5
+	move	#>huff_r012_notzero_gb_ne1,r5
+	move	#<huff_r012_notzero_gb_ne2-huff_r012_notzero_gb_ne1,n5
+	do	a,huff_r012_notzero_loop
 	move	n6,r0			;tab
-;---faster huffman decoder
-;-based on the assumption that the overhead for "do/enddo" pays off
-;-when the loop is taken several times (more than twice?)
-	do	#999,huff_dec012_end	;"inifinite loop"
-	move	x:(r0)+,x0		;v=*tab++
-	mpy	x0,y1,a	r0,r1		;if(v>=0)
-	jge	(r6)	;huff_dec012_end	;return v
-;-nop-	inc	b	;---getbit1 inline
-	lsl	b	x0,n0
-	jne	(r2)	;huff_dec012_gb_ne1
+	;first bit, table entry is negative (don't check)
+	inc	b	;---getbit1 inline
+	move	x:(r0)+,n0		;v=*tab++
+	lsl	b	r0,r1
+	jne	(r5)+n5	;huff_r012_notzero_gb_ne1
 	move	x:(r7)+,b1
 	rol	b
-huff_dec012_gb_ne1
+huff_r012_notzero_gb_ne1
 	move	(r0)-n0			;if(getbit1)
 	tcc	b,a	r1,r0		;tab-=v
-	inc	b	;useful for required AGU delay
-huff_dec012_end
+	;second bit, table entry is negative (don't check)
+	inc	b	;---getbit1 inline
+	move	x:(r0)+,n0		;v=*tab++
+	lsl	b	r0,r1
+	jne	(r5)-n5	;huff_r012_notzero_gb_ne2
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_notzero_gb_ne2
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	;finish two-bit code or read third bit
+	move	(r6)+	;huff_r012_notzero_dec_end+1 = past the "enddo"
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)-	;huff_r012_notzero_dec_end+1	;return v
+	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	huff_r012_notzero_gb_ne3
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_notzero_gb_ne3
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	;get remaining bits of the code using the "infinite loop"
+	do	#999,huff_r012_notzero_dec_end
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)	;huff_r012_notzero_dec_end	;return v
+;-nop-	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r2)	;huff_r012_notzero_gb_ne9
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_notzero_gb_ne9
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	inc	b	;-nop- useful for required AGU delay
+huff_r012_notzero_dec_end
 	enddo				;end of "infinite loop"
-
+	;write upper value
 	lsr	a			;x=val>>4
-	jeq	huff_r012_zero_0
-	eor	x1,a	a,n4		;if(x==15)
-	jne	huff_r012_ne15_0
-	clr	a	n2,y0
-	cmp	y0,a	n2,n7
-	jsne	(r5)			;getbits(linbits)
-	add	x1,a			;+15
+	jeq	huff_r012_notzero_zero_u
 	move	a,n4
-huff_r012_ne15_0
 	inc	b	;---getbit1 inline
 	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
-	jne	huff_r012_gb_ne_0
+	jne	huff_r012_notzero_gb_ne_u
 	move	x:(r7)+,b1
 	rol	b
-huff_r012_gb_ne_0
+huff_r012_notzero_gb_ne_u
 	neg	a	a,y0		;(keep CARRY bit!)
 	tcc	y0,a			;if(getbit1) v=-v
-huff_r012_zero_0
+huff_r012_notzero_zero_u
 	tfr	x0,a	a,x:(r3)+	;xr[i+0]=v
-
-	and	x1,a	n2,y0		;x=val&15 
-	jeq	huff_r012_zero_1
-	eor	x1,a	a,n4		;if(x==15)
-	jne	huff_r012_ne15_1
-	cmp	y0,a	n2,n7
-	jsne	(r5)			;getbits(linbits)
-	add	x1,a			;+15
+	;write lower value
+	and	x1,a			;x=val&15
+	jeq	huff_r012_notzero_zero_l
 	move	a,n4
-huff_r012_ne15_1
 	inc	b	;---getbit1 inline
 	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
-	jne	huff_r012_gb_ne_1
+	jne	huff_r012_notzero_gb_ne_l
 	move	x:(r7)+,b1
 	rol	b
-huff_r012_gb_ne_1
+huff_r012_notzero_gb_ne_l
 	neg	a	a,y0		;(keep CARRY bit!)
 	tcc	y0,a			;if(getbit1) v=-v
-huff_r012_zero_1
+huff_r012_notzero_zero_l
 	move		a,x:(r3)+	;xr[i+1]=v
-huff_loop012
-
+huff_r012_notzero_loop
 	move	n1,r1			;restore r1
 	rts
+
+
+; this function handles tables that have
+; - a single-bit Zero (a "one" bit)  (optimized for the single-bit code)
+; - no linbits
+huff_r012_zero
+	move	x:(r0),n6		;n6=htab
+	move	#>huff_r012_zero_gb_ne9,r2
+	move	#>huff_r012_zero_dec_end,r6
+	; we don't use getbits here, so we can repurpose r5 and n5
+	move	#>huff_r012_zero_gb_nez,r5
+	move	#<huff_r012_zero_notz-huff_r012_zero_gb_nez,n5
+	do	a,huff_r012_zero_loop
+	;first bit means "Zero value or not" and it has no table entry
+	inc	b	;---getbit1 inline
+	lsl	b	n6,r0		;tab
+	jne	(r5)+n5	;huff_r012_zero_gb_nez
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_zero_gb_nez
+	jcc	(r5)-n5	;huff_r012_zero_notz
+	clr	a	a2,x:(r3)+	;xr[i+0]=v = Zero
+	jmp	huff_r012_zero_zero_l	;xr[i+1]=v = Zero
+huff_r012_zero_notz
+	;get remaining bits of the code using the "infinite loop"
+	do	#999,huff_r012_zero_dec_end
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)	;huff_r012_zero_dec_end	;return v
+;-nop-	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r2)	;huff_r012_zero_gb_ne9
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_zero_gb_ne9
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	inc	b	;-nop- useful for required AGU delay
+huff_r012_zero_dec_end
+	enddo				;end of "infinite loop"
+	;write upper value
+	lsr	a			;x=val>>4
+	jeq	huff_r012_zero_zero_u
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_zero_gb_ne_u
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_zero_gb_ne_u
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_zero_zero_u
+	tfr	x0,a	a,x:(r3)+	;xr[i+0]=v
+	;write lower value
+	and	x1,a			;x=val&15
+	jeq	huff_r012_zero_zero_l
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_zero_gb_ne_l
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_zero_gb_ne_l
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_zero_zero_l
+	clr	a	a,x:(r3)+	;xr[i+1]=v
+huff_r012_zero_loop
+	move	n1,r1			;restore r1
+	rts
+
+
+; this function handles table htab16 that has
+; - code length 1, 3...17 (single-bit Zero)  (optimized for the single-bit code)
+; - linbits > 0
+huff_r012_htab16
+	move	#>htab16,n6		;n6=htab
+	move	#>huff_r012_htab16_gb_ne9,r2
+	move	#>huff_r012_htab16_dec_end,r6
+	jsr	getbits_init_r5n5
+	do	a,huff_r012_htab16_loop
+	;first bit means "Zero value or not" and it has no table entry
+	inc	b	;---getbit1 inline
+	lsl	b	n6,r0		;tab
+	jne	huff_r012_htab16_gb_nez
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab16_gb_nez
+	jcc	huff_r012_htab16_notz
+	clr	a	a2,x:(r3)+	;xr[i+0]=v = Zero
+	jmp	huff_r012_htab16_zero_l	;xr[i+1]=v = Zero
+huff_r012_htab16_notz
+	;get remaining bits of the code using the "infinite loop"
+	do	#999,huff_r012_htab16_dec_end
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)	;huff_r012_htab16_dec_end	;return v
+;-nop-	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r2)	;huff_r012_htab16_gb_ne9
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab16_gb_ne9
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	inc	b	;-nop- useful for required AGU delay
+huff_r012_htab16_dec_end
+	enddo				;end of "infinite loop"
+	;write upper value
+	lsr	a	#<0,a0		;x=val>>4
+	jeq	huff_r012_htab16_zero_u
+	sub	x1,a			;if(x==15)
+	jseq	(r5)			;getbits(linbits) n7
+	add	x1,a			;+15
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_htab16_gb_ne_u
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab16_gb_ne_u
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_htab16_zero_u
+	tfr	x0,a	a,x:(r3)+	;xr[i+0]=v
+	;write lower value
+	and	x1,a			;x=val&15
+	jeq	huff_r012_htab16_zero_l
+	sub	x1,a			;if(x==15)
+	jseq	(r5)			;getbits(linbits) n7
+	add	x1,a			;+15
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_htab16_gb_ne_l
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab16_gb_ne_l
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_htab16_zero_l
+	clr	a	a,x:(r3)+	;xr[i+1]=v
+huff_r012_htab16_loop
+	move	n1,r1			;restore r1
+	rts
+
+
+; this function handles table htab24 that has
+; - no single-bit Zero; code length 4...12
+; - linbits > 0
+huff_r012_htab24
+	move	#>htab24,n6		;n6=htab
+	move	#>huff_r012_htab24_gb_ne9,r2
+	move	#>huff_r012_htab24_dec_end,r6
+	jsr	getbits_init_r5n5
+	do	a,huff_r012_htab24_loop
+	move	n6,r0			;tab
+	;get remaining bits of the code using the "infinite loop"
+	do	#999,huff_r012_htab24_dec_end
+	move	x:(r0)+,x0		;v=*tab++
+	mpy	x0,y1,a	r0,r1		;if(v>=0)
+	jge	(r6)	;huff_r012_htab24_dec_end	;return v
+;-nop-	inc	b	;---getbit1 inline
+	lsl	b	x0,n0
+	jne	(r2)	;huff_r012_htab24_gb_ne9
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab24_gb_ne9
+	move	(r0)-n0			;if(getbit1)
+	tcc	b,a	r1,r0		;tab-=v
+	inc	b	;-nop- useful for required AGU delay
+huff_r012_htab24_dec_end
+	enddo				;end of "infinite loop"
+	;write upper value
+	lsr	a	#<0,a0		;x=val>>4
+	jeq	huff_r012_htab24_zero_u
+	sub	x1,a			;if(x==15)
+	jseq	(r5)			;getbits(linbits)
+	add	x1,a			;+15
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_htab24_gb_ne_u
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab24_gb_ne_u
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_htab24_zero_u
+	tfr	x0,a	a,x:(r3)+	;xr[i+0]=v
+	;write lower value
+	and	x1,a			;x=val&15
+	jeq	huff_r012_htab24_zero_l
+	sub	x1,a			;if(x==15)
+	jseq	(r5)			;getbits(linbits)
+	add	x1,a			;+15
+	move	a,n4
+	inc	b	;---getbit1 inline
+	lsl	b	y:(r4+n4),a	;v=pow43tab[x]
+	jne	huff_r012_htab24_gb_ne_l
+	move	x:(r7)+,b1
+	rol	b
+huff_r012_htab24_gb_ne_l
+	neg	a	a,y0		;(keep CARRY bit!)
+	tcc	y0,a			;if(getbit1) v=-v
+huff_r012_htab24_zero_l
+	move		a,x:(r3)+	;xr[i+1]=v
+huff_r012_htab24_loop
+	move	n1,r1			;restore r1
+	rts
+
 ;--^^-------------------------------^^--
 huff_region012_end
 
@@ -464,97 +708,164 @@ huff_region012_end
 	move	#>576,a
 	move	x:(r1+n1),x0		;si.regionend2
 	move	#<grend-si0,n1
-	sub	x0,a	#>huff_dec3_gb_ne1,r6
+	sub	x0,a
 	asr	a	x:(r1+n1),x1	;si.grend			!! x1
 	asr	a	#<tabsel3-si0,n1
-	move	#>htabs,r0
-	move	x:(r1+n1),n0		;si.tabsel3
 	jle	huff_region3_end	;--> skip ( because regionend2>=576 )
-	move	x:(r0+n0),y1		;y1=htab			!! y1
 	move	a,x0	y:pow43tab+1,a	;x0=loop count
 	neg	a	a,n2		;n2= pow43tab[1]		!! n2
 	move		a,y0		;y0=-pow43tab[1]		!! y0
-	move		#htab00,a	;huffman table having only one ZERO
-	cmp	y1,a	#>huff_dec3,r1
-	jeq	huff_region3_end	;--> skip ( because htab is empty )
-	move	#>huff_dec3_gb_ne0,r5
+	jclr	#0,x:(r1+n1),huff_r3_htaba	;si.tabsel3
 
 
-	do	x0,huff_loop3
+;htabb  code length 4 constant (codes are symbols inverted)
+huff_r3_htabb
+	move	#>huff_r3_htabb_dec_start,r1
+	jsr	getbits_init_r5n5
+	do	x0,huff_r3_htabb_loop
 	move	b0,a			;bit counter
-	cmp	x1,a	y1,r0		;tab
-	jmi	huff_dec3_start		;while(huffbit<si.grend)
+	cmp	x1,a
+	jmi	(r1)	;huff_r3_htabb_dec_start	;while(huffbit<si.grend)
 	enddo
-	jmp	huff_loop3
-huff_dec3_start
-;---faster huffman decoder
-;-based on the knowledge that the first table entry is always negative.
+	jmp	huff_region3_end
+huff_r3_htabb_dec_start
+	clr	a	#<4,n7
+	jsr	(r5)			;getbits(4)
+	clr	a	a,x0		;x0=val  inverted
+	;first value
+	jset	#3,x0,huff_r3_htabb_zero_3	;if(x=(val>>3)&1)  inverted
 	inc	b	;---getbit1 inline
-	lsl	b	x:(r0)+,n0	;v=*tab++
-	jne	(r5)	;huff_dec3_gb_ne0
+	lsl	b	n2,a		;x
+	jne	huff_r3_htabb_gb_ne_3
 	move	x:(r7)+,b1
 	rol	b
-huff_dec3_gb_ne0
-	jcc	(r1)	;huff_dec3	;if(getbit1)
-	move	(r0)-n0			;tab-=v
-huff_dec3
+huff_r3_htabb_gb_ne_3			;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_htabb_zero_3
+	clr	a	a,x:(r3)+	;xr[i+0]=x
+	;second value
+	jset	#2,x0,huff_r3_htabb_zero_2	;if(x=(val>>2)&1)  inverted
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_htabb_gb_ne_2
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_htabb_gb_ne_2			;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_htabb_zero_2
+	clr	a	a,x:(r3)+	;xr[i+1]=x
+	;third value
+	jset	#1,x0,huff_r3_htabb_zero_1	;if(x=(val>>1)&1)  inverted
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_htabb_gb_ne_1
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_htabb_gb_ne_1			;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_htabb_zero_1
+	clr	a	a,x:(r3)+	;xr[i+2]=x
+	;fourth value
+	jset	#0,x0,huff_r3_htabb_zero_0	;if(x=val&1)  inverted
+	inc	b	;---getbit1 inline
+	lsl	b	n2,a		;x
+	jne	huff_r3_htabb_gb_ne_0
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_htabb_gb_ne_0			;if(getbit1)
+	tcs	y0,a			;x=-x
+huff_r3_htabb_zero_0
+	move		a,x:(r3)+	;xr[i+3]=x
+huff_r3_htabb_loop
+	jmp	huff_region3_end
+
+
+;htaba  code length 1, 4...6 (single-bit Zero)  (optimized for the single-bit code)
+huff_r3_htaba
+	; we don't use getbits here, so we can repurpose r5 and n5
+	move	#>huff_r3_htaba_dec_start,r5
+	move	#<huff_r3_htaba_dec_gb_nez-huff_r3_htaba_dec_start,n5
+	move	#>huff_r3_htaba_dec,r1
+	move	#>huff_r3_htaba_dec_gb_ne1,r6
+	move	#>htaba,n6
+	do	x0,huff_r3_htaba_loop
+	move	b0,a			;bit counter
+	cmp	x1,a	n6,r0		;tab
+	jmi	(r5)+n5	;huff_r3_htaba_dec_start	;while(huffbit<si.grend)
+	enddo
+	jmp	huff_region3_end
+huff_r3_htaba_dec_start
+	;first bit means "Zero value or not" and it has no table entry
+	inc	b	;---getbit1 inline
+	lsl	b	#<0,a
+	jne	(r5)-n5	;huff_r3_htaba_dec_gb_nez
+	move	x:(r7)+,b1
+	rol	b
+huff_r3_htaba_dec_gb_nez
+	jcc	(r1)	;huff_r3_htaba_dec	;if(getbit1)
+	move		a,x:(r3)+	;xr[i+0]=x = Zero
+	move		a,x:(r3)+	;xr[i+1]=x = Zero
+	move		a,x:(r3)+	;xr[i+2]=x = Zero
+	jmp	huff_r3_htaba_zero_0	;xr[i+3]=x = Zero
+	;get remaining bits of the code
+huff_r3_htaba_dec
 	clr	a	x:(r0)+,x0	;v=*tab++
-	jclr	#23,x0,huff_dec3_end	;if(v>=0) return v
+	jclr	#23,x0,huff_r3_htaba_dec_end	;if(v>=0) return v
 	inc	b	;---getbit1 inline
 	lsl	b	x0,n0
-	jne	(r6)	;huff_dec3_gb_ne1
+	jne	(r6)	;huff_r3_htaba_dec_gb_ne1
 	move	x:(r7)+,b1
 	rol	b
-huff_dec3_gb_ne1
-	jcc	(r1)	;huff_dec3	;if(getbit1)
+huff_r3_htaba_dec_gb_ne1
+	jcc	(r1)	;huff_r3_htaba_dec	;if(getbit1)
 	move	(r0)-n0			;tab-=v
-	jmp	(r1)	;huff_dec3
-huff_dec3_end
-
-	jclr	#3,x0,huff_r3_zero_3	;if(x=(val>>3)&1)
+	jmp	(r1)	;huff_r3_htaba_dec
+huff_r3_htaba_dec_end
+	;first value
+	jclr	#3,x0,huff_r3_htaba_zero_3	;if(x=(val>>3)&1)
 	inc	b	;---getbit1 inline
 	lsl	b	n2,a		;x
-	jne	huff_r3_gb_ne_3
+	jne	huff_r3_htaba_gb_ne_3
 	move	x:(r7)+,b1
 	rol	b
-huff_r3_gb_ne_3				;if(getbit1)
+huff_r3_htaba_gb_ne_3			;if(getbit1)
 	tcs	y0,a			;x=-x
-huff_r3_zero_3
+huff_r3_htaba_zero_3
 	clr	a	a,x:(r3)+	;xr[i+0]=x
-
-	jclr	#2,x0,huff_r3_zero_2	;if(x=(val>>2)&1)
+	;second value
+	jclr	#2,x0,huff_r3_htaba_zero_2	;if(x=(val>>2)&1)
 	inc	b	;---getbit1 inline
 	lsl	b	n2,a		;x
-	jne	huff_r3_gb_ne_2
+	jne	huff_r3_htaba_gb_ne_2
 	move	x:(r7)+,b1
 	rol	b
-huff_r3_gb_ne_2				;if(getbit1)
+huff_r3_htaba_gb_ne_2			;if(getbit1)
 	tcs	y0,a			;x=-x
-huff_r3_zero_2
+huff_r3_htaba_zero_2
 	clr	a	a,x:(r3)+	;xr[i+1]=x
-
-	jclr	#1,x0,huff_r3_zero_1	;if(x=(val>>1)&1)
+	;third value
+	jclr	#1,x0,huff_r3_htaba_zero_1	;if(x=(val>>1)&1)
 	inc	b	;---getbit1 inline
 	lsl	b	n2,a		;x
-	jne	huff_r3_gb_ne_1
+	jne	huff_r3_htaba_gb_ne_1
 	move	x:(r7)+,b1
 	rol	b
-huff_r3_gb_ne_1				;if(getbit1)
+huff_r3_htaba_gb_ne_1			;if(getbit1)
 	tcs	y0,a			;x=-x
-huff_r3_zero_1
+huff_r3_htaba_zero_1
 	clr	a	a,x:(r3)+	;xr[i+2]=x
-
-	jclr	#0,x0,huff_r3_zero_0	;if(x=val&1)
+	;fourth value
+	jclr	#0,x0,huff_r3_htaba_zero_0	;if(x=val&1)
 	inc	b	;---getbit1 inline
 	lsl	b	n2,a		;x
-	jne	huff_r3_gb_ne_0
+	jne	huff_r3_htaba_gb_ne_0
 	move	x:(r7)+,b1
 	rol	b
-huff_r3_gb_ne_0				;if(getbit1)
+huff_r3_htaba_gb_ne_0			;if(getbit1)
 	tcs	y0,a			;x=-x
-huff_r3_zero_0
+huff_r3_htaba_zero_0
 	move		a,x:(r3)+	;xr[i+3]=x
-huff_loop3
+huff_r3_htaba_loop
 
 huff_region3_end
 
@@ -1806,9 +2117,10 @@ synth_window_end
 
 getbits_init	; r7 = input bitstream in X mem
 	move		#<$40,b		;b1=end marker, b0=bit counter
-	lsl	b	#getbits,r5	;getbits(n7) -> jsr (r5)
+	lsl	b	#getbit1,r6	;getbit1()   -> jsr (r6)
+getbits_init_r5n5
+	move		#getbits,r5	;getbits(n7) -> jsr (r5)
 	move		#<getbits_ne-getbits,n5
-	move		#getbit1,r6	;getbit1()   -> jsr (r6)
 	rts
 
 getbits		; r5 = getbits, n5 = getbits_ne - getbits
@@ -2075,46 +2387,62 @@ synth_tab_rsincosx_p	dc	synth_tab_rsinxrcosx
 
 
 
-htab00
-htab04
-htab14
- dc    0
-htab01
- dc   -5,  -3,  -1,  17,   1,  16,   0
-htab02
- dc  -15, -11,  -9,  -5,  -3,  -1,  34,   2,  18,  -1,  33,  32,  17,  -1,   1
- dc   16,   0
-htab03
+;htab00
+;htab04
+;htab14
+; dc    0
+
+htab01 ; code length 1, 2...3  (single-bit Zero)
+; dc   -5
+ dc   -3,  -1,  17,   1,  16
+; dc    0
+
+htab02 ; code length 1, 3...6  (single-bit Zero)
+; dc  -15
+ dc  -11,  -9,  -5,  -3,  -1,  34,   2,  18,  -1,  33,  32,  17,  -1,   1,  16
+; dc    0
+
+htab03 ; code length 2...6
  dc  -13, -11,  -9,  -5,  -3,  -1,  34,   2,  18,  -1,  33,  32,  16,  17,  -1
  dc    1,   0
-htab05
- dc  -29, -25, -23, -15,  -7,  -5,  -3,  -1,  51,  35,  50,  49,  -3,  -1,  19
+
+htab05 ; code length 1, 3...8  (single-bit Zero)
+; dc  -29
+ dc  -25, -23, -15,  -7,  -5,  -3,  -1,  51,  35,  50,  49,  -3,  -1,  19
  dc    3,  -1,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  17,  -1,   1,  16
- dc    0
-htab06
+; dc    0
+
+htab06 ; code length 2...7
  dc  -25, -19, -13,  -9,  -5,  -3,  -1,  51,   3,  35,  -1,  50,  48,  -1,  19
  dc   49,  -3,  -1,  34,   2,  18,  -3,  -1,  33,  32,   1,  -1,  17,  -1,  16
  dc    0
-htab07
- dc  -69, -65, -57, -39, -29, -17, -11,  -7,  -3,  -1,  85,  69,  -1,  84,  83
+
+htab07 ; code length 1, 3...10 (single-bit Zero)
+; dc  -69
+ dc  -65, -57, -39, -29, -17, -11,  -7,  -3,  -1,  85,  69,  -1,  84,  83
  dc   -1,  53,  68,  -3,  -1,  37,  82,  21,  -5,  -1,  81,  -1,   5,  52,  -1
  dc   80,  -1,  67,  51,  -5,  -3,  -1,  36,  66,  20,  -1,  65,  64, -11,  -7
  dc   -3,  -1,   4,  35,  -1,  50,   3,  -1,  19,  49,  -3,  -1,  48,  34,  18
- dc   -5,  -1,  33,  -1,   2,  32,  17,  -1,   1,  16,   0
-htab08
+ dc   -5,  -1,  33,  -1,   2,  32,  17,  -1,   1,  16
+; dc    0
+
+htab08 ; code length 2...11
  dc  -65, -63, -59, -45, -31, -19, -13,  -7,  -5,  -3,  -1,  85,  84,  69,  83
  dc   -3,  -1,  53,  68,  37,  -3,  -1,  82,   5,  21,  -5,  -1,  81,  -1,  52
  dc   67,  -3,  -1,  80,  51,  36,  -5,  -3,  -1,  66,  20,  65,  -3,  -1,   4
  dc   64,  -1,  35,  50,  -9,  -7,  -3,  -1,  19,  49,  -1,   3,  48,  34,  -1
  dc    2,  32,  -1,  18,  33,  17,  -3,  -1,   1,  16,   0
-htab09
+
+htab09 ; code length 3...9
  dc  -63, -53, -41, -29, -19, -11,  -5,  -3,  -1,  85,  69,  53,  -1,  83,  -1
  dc   84,   5,  -3,  -1,  68,  37,  -1,  82,  21,  -3,  -1,  81,  52,  -1,  67
  dc   -1,  80,   4,  -7,  -3,  -1,  36,  66,  -1,  51,  64,  -1,  20,  65,  -5
  dc   -3,  -1,  35,  50,  19,  -1,  49,  -1,   3,  48,  -5,  -3,  -1,  34,   2
  dc   18,  -1,  33,  32,  -3,  -1,  17,   1,  -1,  16,   0
-htab10
- dc -125,-121,-111, -83, -55, -35, -21, -13,  -7,  -3,  -1, 119, 103,  -1, 118
+
+htab10 ; code length 1, 3...11 (single-bit Zero)
+; dc -125
+ dc -121,-111, -83, -55, -35, -21, -13,  -7,  -3,  -1, 119, 103,  -1, 118
  dc   87,  -3,  -1, 117, 102,  71,  -3,  -1, 116,  86,  -1, 101,  55,  -9,  -3
  dc   -1, 115,  70,  -3,  -1,  85,  84,  99,  -1,  39, 114, -11,  -5,  -3,  -1
  dc  100,   7, 112,  -1,  98,  -1,  69,  53,  -5,  -1,   6,  -1,  83,  68,  23
@@ -2122,8 +2450,10 @@ htab10
  dc   -1,  52,  67,  -3,  -1,  22,  97,  -1,  96,  -1,   5,  80, -19, -11,  -7
  dc   -3,  -1,  36,  66,  -1,  51,   4,  -1,  20,  65,  -3,  -1,  64,  35,  -1
  dc   50,   3,  -3,  -1,  19,  49,  -1,  48,  34,  -7,  -3,  -1,  18,  33,  -1
- dc    2,  32,  17,  -1,   1,  16,   0
-htab11
+ dc    2,  32,  17,  -1,   1,  16
+; dc    0
+
+htab11 ; code length 2...11
  dc -121,-113, -89, -59, -43, -27, -17,  -7,  -3,  -1, 119, 103,  -1, 118, 117
  dc   -3,  -1, 102,  71,  -1, 116,  -1,  87,  85,  -5,  -3,  -1,  86, 101,  55
  dc   -1, 115,  70,  -9,  -7,  -3,  -1,  69,  84,  -1,  53,  83,  39,  -1, 114
@@ -2133,7 +2463,8 @@ htab11
  dc   36,  66, -15, -11,  -7,  -3,  -1,  20,  65,  -1,   4,  64,  -1,  35,  50
  dc   -1,  19,  49,  -5,  -3,  -1,   3,  48,  34,  33,  -5,  -1,  18,  -1,   2
  dc   32,  17,  -3,  -1,   1,  16,   0
-htab12
+
+htab12 ; code length 3...10
  dc -115, -99, -73, -45, -27, -17,  -9,  -5,  -3,  -1, 119, 103, 118,  -1,  87
  dc  117,  -3,  -1, 102,  71,  -1, 116, 101,  -3,  -1,  86,  55,  -3,  -1, 115
  dc   85,  39,  -7,  -3,  -1, 114,  70,  -1, 100,  23,  -5,  -1, 113,  -1,   7
@@ -2143,8 +2474,10 @@ htab12
  dc   36,  -1,  66,  20,  -3,  -1,  51,  65,  -1,  35,  50, -11,  -7,  -5,  -3
  dc   -1,  64,   3,  48,  19,  -1,  49,  34,  -1,  18,  33,  -7,  -5,  -3,  -1
  dc    2,  32,   0,  17,  -1,   1,  16,   0
-htab13
- dc -509,-503,-475,-405,-333,-265,-205,-153,-115, -83, -53, -35, -21, -13,  -9
+
+htab13 ; code length 1, 3...19 (single-bit Zero)
+; dc -509
+ dc -503,-475,-405,-333,-265,-205,-153,-115, -83, -53, -35, -21, -13,  -9
  dc   -7,  -5,  -3,  -1, 254, 252, 253, 237, 255,  -1, 239, 223,  -3,  -1, 238
  dc  207,  -1, 222, 191,  -9,  -3,  -1, 251, 206,  -1, 220,  -1, 175, 233,  -1
  dc  236, 221,  -9,  -5,  -3,  -1, 250, 205, 190,  -1, 235, 159,  -3,  -1, 249
@@ -2178,8 +2511,9 @@ htab13
  dc   -7,  -3,  -1,  52,  67,  -1,  80,  36,  -3,  -1,  66,  51,  20, -19, -11
  dc   -5,  -1,  65,  -1,   4,  64,  -3,  -1,  35,  50,  19,  -3,  -1,  49,   3
  dc   -1,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  -3,  -1,  17,   1,  16
- dc    0
-htab15
+; dc    0
+
+htab15 ; code length 3...13
  dc -495,-445,-355,-263,-183,-115, -77, -43, -27, -13,  -7,  -3,  -1, 255, 239
  dc   -1, 254, 223,  -1, 238,  -1, 253, 207,  -7,  -3,  -1, 252, 222,  -1, 237
  dc  191,  -1, 251,  -1, 206, 236,  -7,  -3,  -1, 221, 175,  -1, 250, 190,  -3
@@ -2215,8 +2549,10 @@ htab15
  dc    4,  -9,  -3,  -1,  35,  50,  -3,  -1,  64,   3,  19,  -3,  -1,  49,  48
  dc   34,  -9,  -7,  -3,  -1,  18,  33,  -1,   2,  32,  17,  -3,  -1,   1,  16
  dc    0
-htab16
- dc -509,-503,-461,-323,-103, -37, -27, -15,  -7,  -3,  -1, 239, 254,  -1, 223
+
+htab16 ; code length 1, 3...17 (single-bit Zero)
+; dc -509
+ dc -503,-461,-323,-103, -37, -27, -15,  -7,  -3,  -1, 239, 254,  -1, 223
  dc  253,  -3,  -1, 207, 252,  -1, 191, 251,  -5,  -1, 175,  -1, 250, 159,  -3
  dc   -1, 249, 248, 143,  -7,  -3,  -1, 127, 247,  -1, 111, 246, 255,  -9,  -5
  dc   -3,  -1,  95, 245,  79,  -1, 244, 243, -53,  -1, 240,  -1,  63, -29, -19
@@ -2250,8 +2586,9 @@ htab16
  dc  -23, -13,  -7,  -3,  -1,  52,  67,  -1,  80,  36,  -3,  -1,  66,  51,  20
  dc   -5,  -1,  65,  -1,   4,  64,  -1,  35,  50,  -3,  -1,  19,  49,  -3,  -1
  dc    3,  48,  34,  -3,  -1,  18,  33,  -1,   2,  32,  -3,  -1,  17,   1,  16
- dc    0
-htab24
+; dc    0
+
+htab24 ; code length 4...12
  dc -451,-117, -43, -25, -15,  -7,  -3,  -1, 239, 254,  -1, 223, 253,  -3,  -1
  dc  207, 252,  -1, 191, 251,  -5,  -1, 250,  -1, 175, 159,  -1, 249, 248,  -9
  dc   -5,  -3,  -1, 143, 127, 247,  -1, 111, 246,  -3,  -1,  95, 245,  -1,  79
@@ -2287,21 +2624,51 @@ htab24
  dc   -1,  65,  -1,   4,  64,  -1,  35,  50,  -1,  19,  49,  -7,  -5,  -3,  -1
  dc    3,  48,  34,  18,  -1,  33,  -1,   2,  32,  -3,  -1,  17,   1,  -1,  16
  dc    0
-htaba
- dc  -29, -21, -13,  -7,  -3,  -1,  11,  15,  -1,  13,  14,  -3,  -1,   7,   5
+
+htaba ; region3 only, code length 1, 4...6 (single-bit Zero)
+; dc  -29
+ dc  -21, -13,  -7,  -3,  -1,  11,  15,  -1,  13,  14,  -3,  -1,   7,   5
  dc    9,  -3,  -1,   6,   3,  -1,  10,  12,  -3,  -1,   2,   1,  -1,   4,   8
- dc    0
-htabb
- dc  -15,  -7,  -3,  -1,  15,  14,  -1,  13,  12,  -3,  -1,  11,  10,  -1,   9
- dc    8,  -7,  -3,  -1,   7,   6,  -1,   5,   4,  -3,  -1,   3,   2,  -1,   1
- dc    0
-htablinbits
- dc 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,6,8,10,13,4,5,6,7,8,9,11,13,0,0
-htabs
- dc htab00,htab01,htab02,htab03,htab04,htab05,htab06,htab07,htab08,htab09
- dc htab10,htab11,htab12,htab13,htab14,htab15,htab16,htab16,htab16,htab16
- dc htab16,htab16,htab16,htab16,htab24,htab24,htab24,htab24,htab24,htab24
- dc htab24,htab24,htaba,htabb
+; dc    0
+
+;htabb ; region3 only, code length 4 constant (codes are symbols inverted)
+; dc  -15,  -7,  -3,  -1,  15,  14,  -1,  13,  12,  -3,  -1,  11,  10,  -1,   9
+; dc    8,  -7,  -3,  -1,   7,   6,  -1,   5,   4,  -3,  -1,   3,   2,  -1,   1
+; dc    0
+
+htabs	; function, linbits, table
+ dc huff_r012_empty,    0,      0 ;0  empty table, no input bits
+ dc huff_r012_zero,     0, htab01 ;1  code length 1, 2...3  (single-bit Zero)
+ dc huff_r012_zero,     0, htab02 ;2  code length 1, 3...6  (single-bit Zero)
+ dc huff_r012_notzero,  0, htab03 ;3  code length 2...6
+ dc huff_r012_empty,    0,      0 ;4  empty table, no input bits
+ dc huff_r012_zero,     0, htab05 ;5  code length 1, 3...8  (single-bit Zero)
+ dc huff_r012_notzero,  0, htab06 ;6  code length 2...7
+ dc huff_r012_zero,     0, htab07 ;7  code length 1, 3...10 (single-bit Zero)
+ dc huff_r012_notzero,  0, htab08 ;8  code length 2...11
+ dc huff_r012_notzero,  0, htab09 ;9  code length 3...9
+ dc huff_r012_zero,     0, htab10 ;10 code length 1, 3...11 (single-bit Zero)
+ dc huff_r012_notzero,  0, htab11 ;11 code length 2...11
+ dc huff_r012_notzero,  0, htab12 ;12 code length 3...10
+ dc huff_r012_zero,     0, htab13 ;13 code length 1, 3...19 (single-bit Zero)
+ dc huff_r012_empty,    0,      0 ;14 empty table, no input bits
+ dc huff_r012_notzero,  0, htab15 ;15 code length 3...13
+ dc huff_r012_htab16,   1,      0 ;16 code length 1, 3...17 (single-bit Zero)
+ dc huff_r012_htab16,   2,      0 ;17
+ dc huff_r012_htab16,   3,      0 ;18
+ dc huff_r012_htab16,   4,      0 ;19
+ dc huff_r012_htab16,   6,      0 ;20
+ dc huff_r012_htab16,   8,      0 ;21
+ dc huff_r012_htab16,  10,      0 ;22
+ dc huff_r012_htab16,  13,      0 ;23
+ dc huff_r012_htab24,   4,      0 ;24 code length 4...12
+ dc huff_r012_htab24,   5,      0 ;25
+ dc huff_r012_htab24,   6,      0 ;26
+ dc huff_r012_htab24,   7,      0 ;27
+ dc huff_r012_htab24,   8,      0 ;28
+ dc huff_r012_htab24,   9,      0 ;29
+ dc huff_r012_htab24,  11,      0 ;30
+ dc huff_r012_htab24,  13,      0 ;31
 
 
 sfbands_p
