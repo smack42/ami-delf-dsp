@@ -692,8 +692,6 @@ synth_grp4
 	move			x:(r0)+n0,a	a,y:(r5)+n5	;update r0, r5
 synth_grp5
 
-	ori	#$08,mr				;SCALE UP mode
-
 ;	** pass 6
 	move	n6,r6				;x:synth_tab_rsincosx_p
 	move	#<1+1,n2
@@ -739,8 +737,6 @@ synth_unscramble
 ;------	5+1 words, return: jmp (r7)
 	move			a,x:(r5)+
 
-	andi	#$f3,mr				;NO SCALING mode
-
 ;	** window audio data
 	move	x:synth_audio_p,r0
 	movec	x:synth_audio_mask,m0		;modulo addressing
@@ -774,23 +770,21 @@ synth_unscramble
 
 
 ;	** finally: write audio data to output buffer
-;	** with rounding from 24 to 16 bits
+;	** with limiting and rounding down to 16 bits per sample
 	move	x:synth_out_p,r4
 	move	x:synth_pcm64_p,r0
-	move	#<31,n0
-	move	#>$007fff,y0			;positive 16-bit limit
-	move	#>$000080,x0			;shift right by 16 bits
+	move		#<32,n1
+	clr	b	r0,r1
+	move		#<$80,b1	;rounding constant
+	move		x:(r0)+,a	b,y0	;#$000080
+	asl	a	(r1)+n1		;prefetch a
 	do	#32,synth_out_loop
-	move			x:(r0)+,x1
-	mpyr	x1,#8,a				;round to 16 bits
-	cmp	y0,a		x:(r0+n0),x1
-	tgt	y0,a				;prevent overflow
-	mpyr	x1,#8,b				;round to 16 bits
-	cmp	y0,b		a,x1
-	tgt	y0,b				;prevent overflow
-	mpy	x1,x0,b		b,x1		;shift to high bits
-	mpy	x1,x0,b		b0,x:(r4)	;shift to high bits
-	move			b0,y:(r4)+
+	asl	a
+	add	y0,a	x:(r1)+,b	;rounding a
+	asl	b	a,x:(r4)	;limiting a
+	asl	b
+	add	y0,b	x:(r0)+,a	;rounding b
+	asl	a	b,y:(r4)+	;limiting b ;prefetch a
 synth_out_loop
 	move	r4,x:synth_out_p
 
@@ -853,11 +847,6 @@ synth_window
 	rts
 synth_window_end
 ;		** 21 words
-
-
-synth_bfy1_help
-	jmp	(r7)
-	move	#synth_bfy1,r7
 
 synth_unscramble_help
 	jmp	(r7)
