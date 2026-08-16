@@ -789,26 +789,38 @@ int main(void)
     NewList((struct List*)&playlist);
     if(!noplay)
     {
-        ULONG delfina_model;
-        double delfina_dspclock;
         if (!(DelfinaBase=OpenLibrary("delfina.library",4)))
         {
             printf("**unable to open delfina.library V4\n");
             rc=20;
             goto exit_clean;
         }
-        delfina_model=Delf_GetAttr(DA_HWInfo,0);
-        delfina_model&=0xff; i=0;
-        while(delfina_model) { delfina_model>>=1; i++; }
-        delfina_model=i ? (i-1) : 7;
-        delfina_dspclock=(double)Delf_GetAttr(DA_DSPClock,0)/1000000.0;
         if(verbose)
+        {
+            double delfina_dspclock;
+            ULONG delfina_model, delfina_memory, delfina_numfreq, delfina_freq;
+            delfina_model = Delf_GetAttr(DA_HWInfo,0);
+            delfina_model &= 0xff; i=0;
+            while(delfina_model) { delfina_model>>=1; i++; }
+            delfina_model=i ? (i-1) : 7;
+            delfina_dspclock = (double)Delf_GetAttr(DA_DSPClock,0) * 1e-6;
+            delfina_memory = ((Delf_AvailMem(DMEMF_PROG|DMEMF_TOTAL) + 1023) >> 10)
+                          + ((Delf_AvailMem(DMEMF_YDATA|DMEMF_TOTAL) + 1023) >> 10);
             printf("\n  Delfina %s: delfina.library v%d.%d, %d K memory, %.1f MHz DSP\n",
                    delfina_name[delfina_model],
                    DelfinaBase->lib_Version,
                    DelfinaBase->lib_Revision,
-                   (Delf_AvailMem(DMEMF_PROG|DMEMF_TOTAL)+Delf_AvailMem(DMEMF_YDATA|DMEMF_TOTAL)+1023)>>10,
+                   delfina_memory,
                    delfina_dspclock );
+            delfina_numfreq = Delf_GetAttr(DA_Frequencies, 0);
+            for (i = 0;  i < delfina_numfreq;  ++i)
+            {
+                delfina_freq = Delf_GetAttr(DA_Index, i);
+                printf((i == 0 ? "  supported audio frequencies: %d" : ", %d"),
+                    delfina_freq );
+            }
+            printf("\n");
+        }
     }
     TimerBase=(struct Library*)FindName(&SysBase->DeviceList,"timer.device");
     mytask=FindTask(NULL);
