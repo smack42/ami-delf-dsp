@@ -30,7 +30,6 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
   -CPU 68020+
   -AmigaOS V37+
   -Delfina DSP board
-  -asyncio.library V39+
 
   -developed on A1200 - OS3.1/68030+882@40MHz/16MBFastRAM/Delfina1200DSP
   -tested on various machines with Delfina 1200, Lite, Plus or Flipper
@@ -39,7 +38,6 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
 
 #recommended
 
-  -reqtools.library V38+
   -latest version of delfina.library (see also 'known problems' section)
   -some MPEG audio files :)
 
@@ -218,7 +216,7 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
   mailto: smack42@web.de
 
   DelfMPEG - MPEG audio player for Delfina DSP
-  Copyright (C) 1999-2003  Michael Henke
+  Copyright (C) 1999-2026  Michael Henke
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -230,6 +228,5 @@ $VER: DelfMPEG 1.0 (Sat 17-May-2003)
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
 
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+  You should have received a copy of the GNU General Public License along
+  with this program; if not, see <https://www.gnu.org/licenses/>.

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
     DelfMPEG - MPEG audio player for Delfina DSP
-    Copyright (C) 1999-2003  Michael Henke
+    Copyright (C) 1999-2026  Michael Henke
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -13,9 +13,8 @@
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU General Public License along
+    with this program; if not, see <https://www.gnu.org/licenses/>.
 
 *****************************************************************************/
 
@@ -36,7 +35,7 @@
 #include <math.h>
 #include <stdio.h>
 
-static UBYTE version[]="$VER: DelfMPEG 1.0 (Sat 17-May-2003)";
+static UBYTE version[]="$VER: DelfMPEG 1.1_dev (2026-08-16)";
 static UBYTE template[]=
  "FILES/M,-V=VERBOSE/S,-N=NOPLAY/S,-T=SHOWTAG/S,-NL=NOFASTL/S,-NP=NOFASTP/S,"
  "-F=FRAMEBUF/K/N,-A=ASYNCBUF/K/N,-FF=FFSKIP/K/N,-NT=NOTIMER/S,-M=MONO/S,"
@@ -762,7 +761,7 @@ int main(void)
         printf(
         "\n"
         "  DelfMPEG - MPEG audio player for Delfina DSP\n"
-        "  Copyright (C) 1999-2003  Michael Henke\n"
+        "  Copyright (C) 1999-2026  Michael Henke\n"
         "\n"
         "  This program is free software; you can redistribute it and/or modify\n"
         "  it under the terms of the GNU General Public License as published by\n"
@@ -774,9 +773,8 @@ int main(void)
         "  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n"
         "  GNU General Public License for more details.\n"
         "\n"
-        "  You should have received a copy of the GNU General Public License\n"
-        "  along with this program; if not, write to the Free Software\n"
-        "  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA\n"
+        "  You should have received a copy of the GNU General Public License along\n"
+        "  with this program; if not, see <https://www.gnu.org/licenses/>.\n"
         "\n"  );
 
 
