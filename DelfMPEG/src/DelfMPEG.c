@@ -126,7 +126,7 @@ struct TagItem tag_done={TAG_DONE};
 UBYTE *outfilename=NULL;
 struct Task *mytask;
 ULONG bytes_total, bytes_loaded, buffers_filled, buffers_missed, write_buffers_filled;
-ULONG prevheader, currheader, frames_loaded, frames_played;
+ULONG prevheader, currheader, frames_loaded, frames_played, bytes_skipped;
 ULONG setpos_start, setpos_framesize;
 ULONG decoder_busy, maindata_err;
 ULONG trigger_irq; /* 0=running; 1=get+put; 2=put(no get); */
@@ -1042,19 +1042,23 @@ next_file:
             bytes_total=fib->fib_Size;
             ReadAsync(file,&currheader,4);
 
+            bytes_skipped = 0;
             if(currheader==0x52494646)          /* RIFF WAVE header */
             {
                 UBYTE b[8];
                 ReadAsync(file,&b[0],8);
                 r1=20;  /* 12+8 bytes */
+                bytes_skipped += 12;
                 while(1)
                 {
                     if(ReadAsync(file,&b[0],8)!=8)   /* chunk name + length */
                         break;  /* EOF -> ReadFrame() detects this */
+                    bytes_skipped += 8;
                     r1=((LONG)b[7]<<24)|((LONG)b[6]<<16)|((LONG)b[5]<<8)|(LONG)b[4];
                     if((b[0]=='d')&&(b[1]=='a')&&(b[2]=='t')&&(b[3]=='a'))
                         break;                       /* found data chunk */
                     SeekAsync(file,r1,MODE_CURRENT); /* skip unknown chunk */
+                    bytes_skipped += r1;
                 }
                 bytes_total=r1;
                 if(verbose)
@@ -1073,6 +1077,7 @@ next_file:
                     printf("  skipped ID3v2.%d.%d tag (%d bytes)\n",
                             currheader&0xFF, b[0], r1);
                 bytes_loaded+=r1;
+                bytes_skipped += r1;
                 ReadAsync(file,&currheader,4);
             }
 
@@ -1209,12 +1214,16 @@ next_file:
                 layer=curr_load->layer;
                 setpos_framesize=curr_load->framesize;
 
-                duration=(double)bytes_total/((double)freq/1152.0)/(double)curr_load->framesize;
-                r1=mpg_bitrate[layer-1][curr_load->br_ind];
                 if(xingvbr && xing_frames)
                 {
                     duration=(double)xing_frames*1152.0/(double)freq;
-                    r1=(LONG)((double)bytes_total/duration/125.0);
+                    r1=(LONG)((double)(bytes_total - bytes_skipped)/duration/125.0);
+                }
+                else
+                {
+                    duration=(double)(bytes_total - bytes_skipped)
+                            / ((double)freq/1152.0) / (double)curr_load->framesize;
+                    r1=mpg_bitrate[layer-1][curr_load->br_ind];
                 }
                 sprintf(rexxfiletypebuf,
                         "layer %s  %s%03d kbps  %ld Hz  %s",
