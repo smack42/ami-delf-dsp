@@ -774,17 +774,17 @@ synth_unscramble
 	move	x:synth_pcm64_p,r0
 	move		#<32,n1
 	clr	b	r0,r1
-	move		#<$80,b1	;rounding constant
-	move		x:(r0)+,a	b,y0	;#$000080
+	move		#<$40,b1	;rounding constant
+	move		x:(r0)+,a	b,y0	;#$000080 after SCALE UP
 	asl	a	(r1)+n1		;prefetch a
+	ori	#$08,mr				;SCALE UP mode
 	do	#32,synth_out_loop
-	asl	a
 	add	y0,a	x:(r1)+,b	;rounding a
-	asl	b	a,x:(r4)	;limiting a
-	asl	b
+	asl	b	a,x:(r4)	;SCALE UP limiting a
 	add	y0,b	x:(r0)+,a	;rounding b
-	asl	a	b,y:(r4)+	;limiting b ;prefetch a
+	asl	a	b,y:(r4)+	;SCALE UP limiting b ;prefetch a
 synth_out_loop
+	andi	#$f3,mr				;NO SCALING mode
 	move	r4,x:synth_out_p
 
 ;	** fraction pointer to next triplet
