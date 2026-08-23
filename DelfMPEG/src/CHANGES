@@ -1,6 +1,25 @@
 DelfMPEG CHANGES
 
 
+1.1 (2026-08-23)
+    * main program
+      - do not use asyncio.library anymore, AsyncIO is now statically linked
+      - do not use reqtools.library anymore, use ASL file requesters instead
+      - do not overwrite any existing files when using option OUTFILE
+      - display Delfina supported audio frequencies in VERBOSE mode
+      - changed the default FFSKIP value to 40, which is about one second
+      - improved duration estimation by subtracting any skipped file headers
+    * mp2 decoder
+      - faster getbits function
+      - higher accuracy sine and cosine tables
+      - improved accuracy by limiting and rounding the output to 16 bits
+    * mp3 decoder
+      - faster getbits function
+      - faster Huffman decoding
+      - higher accuracy sine and cosine tables
+      - more compact storage of pow43tab, reducing program size by 8 KB
+
+
 1.0 (Sat 17-May-2003)
     -main processing now in SoftInterrupt instead of Delfina hardware IRQ
      (less interference with timing-critical activities like Serial I/O)

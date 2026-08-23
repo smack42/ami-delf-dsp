@@ -35,7 +35,7 @@
 #include <math.h>
 #include <stdio.h>
 
-static UBYTE version[]="$VER: DelfMPEG 1.1_dev (2026-08-16)";
+static UBYTE version[]="$VER: DelfMPEG 1.1 (2026-08-23)";
 static UBYTE template[]=
  "FILES/M,-V=VERBOSE/S,-N=NOPLAY/S,-T=SHOWTAG/S,-NL=NOFASTL/S,-NP=NOFASTP/S,"
  "-F=FRAMEBUF/K/N,-A=ASYNCBUF/K/N,-FF=FFSKIP/K/N,-NT=NOTIMER/S,-M=MONO/S,"
