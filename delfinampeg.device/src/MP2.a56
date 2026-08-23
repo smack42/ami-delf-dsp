@@ -1,7 +1,7 @@
 ;*****************************************************************************
 ;
 ;    delfinampeg.device - mpeg.device for Delfina DSP
-;    Copyright (C) 1999-2003  Michael Henke
+;    Copyright (C) 1999-2026  Michael Henke
 ;
 ;    This program is free software; you can redistribute it and/or modify
 ;    it under the terms of the GNU General Public License as published by
@@ -13,9 +13,8 @@
 ;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;    GNU General Public License for more details.
 ;
-;    You should have received a copy of the GNU General Public License
-;    along with this program; if not, write to the Free Software
-;    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+;    You should have received a copy of the GNU General Public License along
+;    with this program; if not, see <https://www.gnu.org/licenses/>.
 ;
 ;*****************************************************************************
 
@@ -84,16 +83,17 @@
 	move	x0,x:synth_out_p	;store output pointer
 
 	tfr	x1,a	#>1,x0		;a=mono
-	tst	a	#>2,a
+	tst	a	#<2,a1
 	tne	x0,a
-	move	a,x:channels		;store channels
+	move	a1,x:channels		;store channels
+	move	a1,n2			;n2=channels			!! n2
 
-	move	a,y:busy		;set BUSY to non-zero
+	move	a1,y:busy		;set BUSY to non-zero
 
 	move	y1,n0			;translate
 	move	#table_translate_sblimit,r0
 
-	move	y1,x:translate
+;;	move	y1,x:translate
 
 	move	y0,x:jsbound		;store jsbound
 
@@ -107,25 +107,23 @@
 	move	y1,x:decoder_quantizations
 
 ;	** compute audio buffer modifiers
-	move	#>$7ff,x0
-	move	#>128,x1
 ;;	move	x:channels,b
 ;>>> forcemono
-	move	#>1,y0
+	clr	b	n2,y0		;channels
 	move	y:forcemono,a
-	tst	a	x:channels,b
-	tne	y0,b
+	tst	a	#<1,b1
+	teq	y0,b
 ;<<<
-	move	#>2,y0
-	move	#>$3ff,a
-	cmp	y0,b	#>64,b
-	teq	x0,a
-	teq	x1,b
-	move	a,x:synth_audio_mask
-	move	b,x:synth_audio_delta
+	move		#>$7ff,a
+	lsr	a	a,x0
+	move		#<128,r0
+	lsr	b	#<64,r1
+	tne	x0,a	r0,r1
+	move	a1,x:synth_audio_mask	;1=$3ff, 2=$7ff
+	move	r1,x:synth_audio_delta	;1=64,   2=128
 
 ;	** calculate deltas for the cosine transform
-	move	x:channels,a
+	move	n2,a			;channels
 	lsl	a	a,y0
 	add	y0,a
 	move	a,x:synth_imfct_delta
@@ -138,11 +136,11 @@
 clear_loop
 
 ;	** reset getbits
-	move	#getbits_temp,r0
-	move	#inbuf,x0
-	move	x0,x:getbits_stream_p
-	move	#$800000,a1
-	move	a1,x:(r0)	;initialize 'current bitstream word'
+	move	#inbuf,r7
+	move	r7,x:getbits_stream_p
+	move	#getbits_temp,r6
+	move	#<$80,a
+	move	a1,x:(r6)	;initialize 'current bitstream word'
 
 
 
@@ -152,46 +150,43 @@ clear_loop
 ;******************************************************************
 ;decode_scales
 ;	** getbits_init
-	move	x:getbits_stream_p,r7
-	move	#getbits_temp,r6
-	move	x:decoder_getbits_loop_p,r5
+;;	move	x:getbits_stream_p,r7
+;;	move	#getbits_temp,r6
+	move	#getbits__,r5
+	move	#<getbits_ne-getbits__,n5
 
 ;	**
 ;	** fetch bit allocation table
 ;	**
-	clr	b	x:channels,y0
+	clr	b	n2,y0		;channels
+	move	x:(r6),b1		;current bitstream word
 	move	x:jsbound,y1
 	move	x:decoder_nbals,r0
 	move	#decoder_bitalloc,r1
 
 ;	** loop until jsbound
-	move	y:(r0)+,n7		; nbal
-	move	#>1,x1
+	clr	a	y:(r0)+,n7	; nbal
 	do	y1,sb_loop0	;jsbound
 	do	y0,ch_loop0	;channels
-	clr	a	b,x0		;save b
-	move	x:(r6),b1		;current bitstream word
+	inc	b			;b0=b0+1
 	jsr	(r5)			;-getbits- read nbal bits
-	tfr	x0,b	b1,x:(r6)	;restore b
-	add	x1,b	a,x:(r1)+	;b=b+1
+	clr	a	a,x:(r1)+
 ch_loop0
-	move	y:(r0)+,n7		; nbal
+	move		y:(r0)+,n7	; nbal
 sb_loop0
 ;	** loop until sblimit (for joint-stereo only)
 	move	x:sblimit,a
-	sub	y1,a	b,y0
+	sub	y1,a
 	jle	sb_loop1		; not joint-stereo
 	do	a,sb_loop1	;sblimit-jsbound
-	clr	a	b,x0		;save b
-	move	x:(r6),b1		;current bitstream word
+	clr	a
 	jsr	(r5)			;-getbits- read nbal bits
-	tfr	x0,b	b1,x:(r6)	;restore b
-	add	x1,b	a,x:(r1)+
-	add	x1,b	y:(r0)+,n7		; nbal
-	move		a,x:(r1)+	b,y0	;b=b+2
+	inc	b			;b0=b0+1
+	inc	b			;b0=b0+1
+	move		a,x:(r1)+
+	move		a,x:(r1)+
+	move		y:(r0)+,n7	; nbal
 sb_loop1
-
-	move	x:(r6),b1	;current bitstream word
 
 ;	**
 ;	** fetch scalefactor selection information
@@ -200,7 +195,7 @@ sb_loop1
 	move	#decoder_bitalloc,r4
 	move	r4,r3
 	move	#2,n7			; 2 bit scfsi
-	do	y0,sf_loop0	;sblimit*channels
+	do	b0,sf_loop0	;sblimit*channels
 	move	x:(r3)+,a		;check bitalloc
 	tst	a	#0,a
 	jsne	(r5)			;-getbits-
@@ -213,13 +208,13 @@ sf_loop0
 	move	#decoder_scfsi,r0
 	move	#decoder_scalefactor,r1
 	move	#6,n7			; 6 bit scalefactors
-	do	y0,sf_loop1	;sblimit*channels
+	do	b0,sf_loop1	;sblimit*channels
 
 	clr	a	x:(r4)+,x0	;check bitalloc
 	cmp	x0,a	x:(r0)+,x0
 	jeq	sf_ba0
 
-	cmp	x0,a	#>1,a
+	cmp	x0,a	#<1,a1
 	jne	sf_c1
 	clr	a
 	jsr	(r5)			;-getbits- all three
@@ -229,7 +224,7 @@ sf_loop0
 	jsr	(r5)			;-getbits-
 	jmp	sf_resume
 
-sf_c1	cmp	x0,a	#>2,a
+sf_c1	cmp	x0,a	#<2,a1
 	jne	sf_c2
 	clr	a
 	jsr	(r5)			;-getbits- 1 + 3
@@ -257,7 +252,7 @@ sf_loop1
 
 	move	b1,x:(r6)
 
-;	** getbits_exit
+;	** getbits_exit r5,n5 r6
 	move	r7,x:getbits_stream_p
 
 
@@ -340,7 +335,8 @@ decode_samples
 ;	** getbits_init
 	move	x:getbits_stream_p,r7
 	move	#getbits_temp,r6
-	move	x:decoder_getbits_loop_p,r5
+	move	#getbits__,r5
+	move	#<getbits_ne-getbits__,n5
 
 
 
@@ -404,9 +400,9 @@ ds_no_joint
 	move	y:(r3+n3),n7		; bits
 
 	clr	a	n3,y0
-	cmp	y0,a	#>1,a
+	cmp	y0,a	#<1,a1
 	jeq	ds_fetch_grouping
-	cmp	y0,a	#>3,a
+	cmp	y0,a	#<3,a1
 	jeq	ds_fetch_grouping
 	cmp	y0,a	n3,a
 	jeq	ds_fetch_grouping
@@ -518,7 +514,7 @@ ds_ch_loop
 	move	(r2)+n2		; update next to quantization
 	jmp	ds_sb_loop_head
 ds_sb_loop
-;	** getbits_exit
+;	** getbits_exit r5,n5 r6
 	move	r7,x:getbits_stream_p
 
 
@@ -695,8 +691,6 @@ synth_grp4
 	move			x:(r0)+n0,a	a,y:(r5)+n5	;update r0, r5
 synth_grp5
 
-	ori	#$08,mr				;SCALE UP mode
-
 ;	** pass 6
 	move	n6,r6				;x:synth_tab_rsincosx_p
 	move	#<1+1,n2
@@ -742,8 +736,6 @@ synth_unscramble
 ;------	5+1 words, return: jmp (r7)
 	move			a,x:(r5)+
 
-	andi	#$f3,mr				;NO SCALING mode
-
 ;	** window audio data
 	move	x:synth_audio_p,r0
 	movec	x:synth_audio_mask,m0		;modulo addressing
@@ -777,14 +769,22 @@ synth_unscramble
 
 
 ;	** finally: write audio data to output buffer
+;	** with limiting and rounding down to 16 bits per sample
 	move	x:synth_out_p,r4
 	move	x:synth_pcm64_p,r0
-	move	#<31,n0
+	move		#<32,n1
+	clr	b	r0,r1
+	move		#<$40,b1	;rounding constant
+	move		x:(r0)+,a	b,y0	;#$000080 after SCALE UP
+	asl	a	(r1)+n1		;prefetch a
+	ori	#$08,mr				;SCALE UP mode
 	do	#32,synth_out_loop
-	move	x:(r0)+,x1
-	move			x:(r0+n0),x0
-	move			x,l:(r4)+
+	add	y0,a	x:(r1)+,b	;rounding a
+	asl	b	a,x:(r4)	;SCALE UP limiting a
+	add	y0,b	x:(r0)+,a	;rounding b
+	asl	a	b,y:(r4)+	;SCALE UP limiting b ;prefetch a
 synth_out_loop
+	andi	#$f3,mr				;NO SCALING mode
 	move	r4,x:synth_out_p
 
 ;	** fraction pointer to next triplet
@@ -795,14 +795,14 @@ synth_out_loop
 	add	x0,a		x:synth_audio_delta,n0
 	move	a,x:synth_imfct_fraction_p
 	move	(r0)-n0
-	movec	x:synth_audio_mask,m0
+	movec	x:synth_audio_mask,m0	;modulo addressing
 
 	move	x:decode_tr3_count,a
 
 	sub	x0,a	(r0)-n0
 	move	a,x:decode_tr3_count
 
-	movec	#$ffff,m0
+	movec	m7,m0			;linear addressing
 	tst	a	r0,x:synth_audio_p
 	jne	synth_tr_loop_head
 
@@ -847,30 +847,23 @@ synth_window
 synth_window_end
 ;		** 21 words
 
-
-synth_bfy1_help
-	jmp	(r7)
-	move	#synth_bfy1,r7
-
 synth_unscramble_help
 	jmp	(r7)
 	move	#synth_unscramble,r7
 
 
 
-getbits_loop_start
+getbits__
+; r5 = getbits__ ; n5 = getbits_ne - getbits__
 	do	n7,getbits_loop
-	lsl	b			;b1=b1<<1 (new CARRY bit)
-	jne	getbits_ne		;(patch for short jump)
-getbits_cp
+	lsl	b	(r5)+n5		;b1=b1<<1 (new CARRY bit)
+	jne	(r5)-n5			;getbits_ne
 	move	x:(r7)+,b1		;fetch next 24 bits
 	rol	b			;b1=b1<<1, append end marker
 getbits_ne
 	rol	a			;get CARRY bit, set condition code ZERO
 getbits_loop
 	rts
-getbits_loop_end
-;		** 9 words (8 words with 'jne' short jump)
 
 
 
@@ -974,38 +967,38 @@ synth_imfct_slow
 
 synth_tab_rsinxrcosx
 ;	**	x:rsinx		y:rcosx
-	dcl	0.000000,	 0.999999
-	dcl	0.999999,	 0.000000
-	dcl	0.707107,	 0.707107
-	dcl	0.707107,	-0.707107
-	dcl	0.382683,	 0.923880
-	dcl	0.923880,	-0.382683
-	dcl	0.923880,	 0.382683
-	dcl	0.382683,	-0.923880
-	dcl	0.195090,	 0.980785
-	dcl	0.980785,	-0.195090
-	dcl	0.831470,	 0.555570
-	dcl	0.555570,	-0.831470
-	dcl	0.555570,	 0.831470
-	dcl	0.831470,	-0.555570
-	dcl	0.980785,	 0.195090
-	dcl	0.195090,	-0.980785
-	dcl	0.098017,	 0.995185
-	dcl	0.995185,	-0.098017
-	dcl	0.773010,	 0.634393
-	dcl	0.634393,	-0.773010
-	dcl	0.471397,	 0.881921
-	dcl	0.881921,	-0.471397
-	dcl	0.956940,	 0.290285
-	dcl	0.290285,	-0.956940
-	dcl	0.290285,	 0.956940
-	dcl	0.956940,	-0.290285
-	dcl	0.881921,	 0.471397
-	dcl	0.471397,	-0.881921
-	dcl	0.634393,	 0.773010
-	dcl	0.773010,	-0.634393
-	dcl	0.995185,	 0.098017
-	dcl	0.098017,	-0.995185
+	dcl	$000000,	$7fffff
+	dcl	$7fffff,	$000000
+	dcl	$5a827a,	$5a827a
+	dcl	$5a827a,	$a57d86
+	dcl	$30fbc5,	$7641af
+	dcl	$7641af,	$cf043b
+	dcl	$7641af,	$30fbc5
+	dcl	$30fbc5,	$89be51
+	dcl	$18f8b8,	$7d8a5f
+	dcl	$7d8a5f,	$e70748
+	dcl	$6a6d99,	$471ced
+	dcl	$471ced,	$959267
+	dcl	$471ced,	$6a6d99
+	dcl	$6a6d99,	$b8e313
+	dcl	$7d8a5f,	$18f8b8
+	dcl	$18f8b8,	$8275a1
+	dcl	$0c8bd3,	$7f6237
+	dcl	$7f6237,	$f3742d
+	dcl	$62f202,	$5133cd
+	dcl	$5133cd,	$9d0dfe
+	dcl	$3c56ba,	$70e2cc
+	dcl	$70e2cc,	$c3a946
+	dcl	$7a7d05,	$25280c
+	dcl	$25280c,	$8582fb
+	dcl	$25280c,	$7a7d05
+	dcl	$7a7d05,	$dad7f4
+	dcl	$70e2cc,	$3c56ba
+	dcl	$3c56ba,	$8f1d34
+	dcl	$5133cd,	$62f202
+	dcl	$62f202,	$aecc33
+	dcl	$7f6237,	$0c8bd3
+	dcl	$0c8bd3,	$809dc9
 
 decoder_old_samples_slow
 	ds	3
@@ -1026,13 +1019,12 @@ inbuf	ds	596	;MPG_MAXFRAMESIZE=1792-4
 
 
 channels	ds	1
-translate	ds	1
+;;translate	ds	1
 sblimit		ds	1
 jsbound		ds	1
 
 getbits_stream_p	ds	1
 getbits_temp		ds	1
-decoder_getbits_loop_p	dc	getbits_loop_start
 
 decode_rts_p		ds	1
 decode_ds_sblimit_count	ds	1
@@ -1079,7 +1071,7 @@ synth_pcm64_slow	ds	64
 busy		dc	0
 forcemono	dc	0
 
-synth_tab_window
+synth_tab_window	; all values are divided by two
 	dc	$000000,$fff8c1,$003540,$ff8d41,$01fd40,$faf7c1,$066b80,$db63c1
 	dc	$494780,$249c40,$066b80,$050840,$01fd40,$0072c0,$003540,$000740
 	dc	$ffffc1,$fff841,$003680,$ff7e41,$01f400,$fa9cc1,$05d1c0,$d99601
@@ -1145,31 +1137,31 @@ synth_tab_window
 	dc	$fff981,$ffcc01,$ff9bc1,$fdfc41,$fb5301,$f90881,$dd3201,$b6c401
 	dc	$266a00,$fa2e41,$056340,$fe0c01,$0081c0,$ffc981,$0007c0,$000040
 synth_tab_sinx
-	dc	0.000000,0.049068,0.098017,0.146730	;sine only
-	dc	0.195090,0.242980,0.290285,0.336890
-	dc	0.382683,0.427555,0.471397,0.514103
-	dc	0.555570,0.595699,0.634393,0.671559
-	dc	0.707107,0.740951,0.773010,0.803208
-	dc	0.831470,0.857729,0.881921,0.903989
-	dc	0.923880,0.941544,0.956940,0.970031
-	dc	0.980785,0.989177,0.995185,0.998795
+	dc	$000000,$0647d9,$0c8bd3,$12c810	;sine only
+	dc	$18f8b8,$1f19f9,$25280c,$2b1f35
+	dc	$30fbc5,$36ba20,$3c56ba,$41ce1e
+	dc	$471ced,$4c3fe0,$5133cd,$55f5a5
+	dc	$5a827a,$5ed77d,$62f202,$66cf81
+	dc	$6a6d99,$6dca0d,$70e2cc,$73b5ec
+	dc	$7641af,$788484,$7a7d05,$7c29fc
+	dc	$7d8a5f,$7e9d56,$7f6237,$7fd888
 synth_tab_cosx
-	dc	0.999999,0.998795,0.995185,0.989177	;sine and cosine
-	dc	0.980785,0.970031,0.956940,0.941544
-	dc	0.923880,0.903989,0.881921,0.857729
-	dc	0.831470,0.803208,0.773010,0.740951
-	dc	0.707107,0.671559,0.634393,0.595699
-	dc	0.555570,0.514103,0.471397,0.427555
-	dc	0.382683,0.336890,0.290285,0.242980
-	dc	0.195090,0.146730,0.098017,0.049068
-	dc	0.000000,-0.049068,-0.098017,-0.146730	;cosine only
-	dc	-0.195090,-0.242980,-0.290285,-0.336890
-	dc	-0.382683,-0.427555,-0.471397,-0.514103
-	dc	-0.555570,-0.595699,-0.634393,-0.671559
-	dc	-0.707107,-0.740951,-0.773010,-0.803208
-	dc	-0.831470,-0.857729,-0.881921,-0.903989
-	dc	-0.923880,-0.941544,-0.956940,-0.970031
-	dc	-0.980785,-0.989177,-0.995185,-0.998795
+	dc	$7fffff,$7fd888,$7f6237,$7e9d56	;sine and cosine
+	dc	$7d8a5f,$7c29fc,$7a7d05,$788484
+	dc	$7641af,$73b5ec,$70e2cc,$6dca0d
+	dc	$6a6d99,$66cf81,$62f202,$5ed77d
+	dc	$5a827a,$55f5a5,$5133cd,$4c3fe0
+	dc	$471ced,$41ce1e,$3c56ba,$36ba20
+	dc	$30fbc5,$2b1f35,$25280c,$1f19f9
+	dc	$18f8b8,$12c810,$0c8bd3,$0647d9
+	dc	$000000,$f9b827,$f3742d,$ed37f0	;cosine only
+	dc	$e70748,$e0e607,$dad7f4,$d4e0cb
+	dc	$cf043b,$c945e0,$c3a946,$be31e2
+	dc	$b8e313,$b3c020,$aecc33,$aa0a5b
+	dc	$a57d86,$a12883,$9d0dfe,$99307f
+	dc	$959267,$9235f3,$8f1d34,$8c4a14
+	dc	$89be51,$877b7c,$8582fb,$83d604
+	dc	$8275a1,$8162aa,$809dc9,$802778
 
 
 ;; Sampling grouping tables.

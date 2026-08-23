@@ -1,7 +1,7 @@
 /*****************************************************************************
 
     delfinampeg.device - mpeg.device for Delfina DSP
-    Copyright (C) 2000-2003  Michael Henke
+    Copyright (C) 2000-2026  Michael Henke
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -13,9 +13,8 @@
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    You should have received a copy of the GNU General Public License along
+    with this program; if not, see <https://www.gnu.org/licenses/>.
 
 *****************************************************************************/
 
@@ -47,7 +46,7 @@ extern struct DelfObj DSP56K_MP3;
 #include "MP2.h"
 #include "MP3.h"
 
-/** static LONG pow43tab[8206]; **/
+/** static UBYTE pow43tab[8207*3]; **/
 #include "MP3_pow43tab.h"
 
 extern char DevName;    /* "delfinampeg.device" */
@@ -409,7 +408,7 @@ KPutStr("initDelfina...prg_mp3\n");
             if(!u->mem_ip_mp3) u->mem_ip_mp3=Delf_AllocMem(INTP_MP3_PROG, DMEMF_PROG|DMEMF_INTERNAL);
             if(!(u->prg_mp3=Delf_AddPrg(&DSP56K_MP3))) return(1); /*ERROR*/
             Delf_Run(u->prg_mp3->prog+PROG_MP3_INIT, 0, 0, u->mem_il_mp3, u->mem_ip_mp3, u->freqidx, 0);
-            Delf_CopyMem(pow43tab, (void*)(u->prg_mp3->ydata+DATY_MP3_POW43TAB), 8206*4, DCPF_FROM_AMY|DCPF_YDATA|DCPF_32BIT);
+            Delf_CopyMem(pow43tab, (void*)(u->prg_mp3->ydata+DATY_MP3_POW43TAB), 8207*3, DCPF_FROM_AMY|DCPF_YDATA|DCPF_24BIT);
             Delf_Poke(u->prg_mp3->ydata+DATY_MP3_FORCEMONO, DMEMF_YDATA, (ULONG)u->forcemono);
         }
     }

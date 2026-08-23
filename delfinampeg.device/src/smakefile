@@ -16,3 +16,6 @@ MP2.o: MP2.a56
 
 MP3.o: MP3.a56
 	a56 MP3.a56 object _DSP56K_MP3 nolist
+
+clean:
+	-delete \#?.o \#?.lnk delfinampeg.device

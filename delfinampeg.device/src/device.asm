@@ -1,7 +1,7 @@
 ;*****************************************************************************
 ;
 ;    delfinampeg.device - mpeg.device for Delfina DSP
-;    Copyright (C) 2000-2003  Michael Henke
+;    Copyright (C) 2000-2026  Michael Henke
 ;
 ;    This program is free software; you can redistribute it and/or modify
 ;    it under the terms of the GNU General Public License as published by
@@ -13,9 +13,8 @@
 ;    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;    GNU General Public License for more details.
 ;
-;    You should have received a copy of the GNU General Public License
-;    along with this program; if not, write to the Free Software
-;    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+;    You should have received a copy of the GNU General Public License along
+;    with this program; if not, see <https://www.gnu.org/licenses/>.
 ;
 ;*****************************************************************************
 
@@ -39,7 +38,7 @@ REVISION	EQU	6
 	include "utility/utility.i"
 	include "utility/tagitem.i"
 
-	include	"melodympeg.i"
+	include	"devices/melodympeg.i"
 
 	XDEF	_DevName
 	XDEF	_DelfinaBase
@@ -91,7 +90,7 @@ InitTable	dc.w	RTC_MATCHWORD
 		dc.l	Init__
 
 		dc.b	"$VER: "
-IDString	dc.b	"delfinampeg.device 1.6 (17.05.2003)",0
+IDString	dc.b	"delfinampeg.device 1.7_dev (23.08.2026)",0
 
 _DevName	dc.b	"delfinampeg.device",0
 
