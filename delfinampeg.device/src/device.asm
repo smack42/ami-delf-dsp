@@ -90,7 +90,7 @@ InitTable	dc.w	RTC_MATCHWORD
 		dc.l	Init__
 
 		dc.b	"$VER: "
-IDString	dc.b	"delfinampeg.device 1.7_dev (23.08.2026)",0
+IDString	dc.b	"delfinampeg.device 1.7 (23.08.2026)",0
 
 _DevName	dc.b	"delfinampeg.device",0
 
