@@ -1,0 +1,7 @@
+mhidelfina.library CHANGES
+
+
+1.0 (2026-??-??)
+    * initial release
+    * using the MPEG decoders (mp2, mp3) from DelfMPEG and delfinampeg.device
+

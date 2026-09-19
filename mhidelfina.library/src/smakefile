@@ -1,0 +1,26 @@
+
+mhidelfina.library: library.o mhidelfina.o MPEGdecoder.o MP2.o MP3.o MPEG_PCM.o
+	sc LINK library.o mhidelfina.o MPEGdecoder.o MP2.o MP3.o MPEG_PCM.o TO mhidelfina.library
+
+
+library.o: library.c mhidelfina.h
+	sc library.c
+
+mhidelfina.o: mhidelfina.c mhidelfina.h
+	sc OPT mhidelfina.c
+
+MPEGdecoder.o: MPEGdecoder.c mhidelfina.h MPEG_PCM.h MP2.h MP3.h
+	sc OPT MPEGdecoder.c
+
+MP2.o: MP2.a56
+	a56 MP2.a56 OBJECT _DSP56K_MP2 NOLIST
+
+MP3.o: MP3.a56
+	a56 MP3.a56 OBJECT _DSP56K_MP3 NOLIST
+
+MPEG_PCM.o: MPEG_PCM.a56
+	a56 MPEG_PCM.a56 OBJECT _DSP56K_MPEG_PCM NOLIST
+
+
+clean:
+	-delete \#?.o \#?.lnk mhidelfina.library
