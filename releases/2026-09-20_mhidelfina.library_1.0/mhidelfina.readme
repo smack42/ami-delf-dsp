@@ -1,0 +1,124 @@
+Short:        MHI driver for Delfina DSP
+Author:       smack42@web.de (Michael Henke)
+Uploader:     smack42@web.de (Michael Henke)
+Type:         driver/audio
+Version:      1.0
+Architecture: m68k-amigaos >= 2.0.4
+
+
+
+mhidelfina.library 1.0 (2026-09-20)
+
+
+
+# features
+
+  - plays audio files with almost no CPU load
+    Delfina's DSP56002 does all the decoding and playback
+
+  - supports MPEG-1 Layer II and III (mp2 and mp3)
+
+  - free software, full source code included
+
+
+
+# requirements
+
+  - CPU 68020+
+  - AmigaOS V37+
+  - Delfina DSP board (Classic, Lite, Plus, 1200 or Flipper)
+
+  - developed on A1200 with OS3.2/68030+882@40MHz/16MBFastRAM/Delfina1200DSP
+
+
+
+# recommended
+
+  - application that supports MHI
+    (tested with AmigaAMP 2.25, AmigaAMP 3.35, HippoPlayer 2.67)
+  - some audio files :-)
+
+
+
+# changes since previous release
+
+  - initial release
+
+
+
+# how to use
+
+  Copy mhidelfina.library into your system's LIBS:MHI/ drawer:
+      makedir LIBS:MHI
+      copy mhidelfina.library LIBS:MHI/
+
+  Configure an application program to make use of it, for example:
+
+  AmigaAMP
+      https://www.amigaamp.de
+      https://aminet.net/package/mus/play/AmigaAMP3-68k
+          Prefs - Decoder
+          MHI Support = active
+          MHI Driver  = LIBS:MHI/mhidelfina.library
+
+  HippoPlayer
+      https://github.com/koobo/HippoPlayer
+      https://aminet.net/package/mus/play/hippoplayerupdate
+          Prefs - Play-2
+          Enable MHI = active, select LIBS:MHI/mhidelfina.library
+
+
+
+# known problems
+
+  - this decoder only recognizes MPEG-1 Layer II and III (mp2 and mp3) audio.
+    it doesn't support MPEG-2 (lower sampling rates) or MPEG mixed audio/video.
+
+  - Delfina's hardware driver (delfina.library) might cause system crashes
+    when using this decoder or other demanding Delfina programs.
+
+   1) for the Petsoff Delfinas (Classic, Lite, Plus, 1200)
+      it seems that the most stable driver is still this inofficial version:
+      delfina.library 4.16 ß 3 PATCH#2 14-Oct-2001
+
+   2) for the Delfina Flipper by Individual Computers
+      use the latest driver (delfina.library) that is available
+      at the vendor site:  https://wiki.icomp.de/wiki/Delfina
+      or you can ask in an Amiga forum if there are any further developments of
+      the open source driver software
+
+
+
+# acknowledgements
+
+  mhidelfina.library uses the same DSP code as my other programs (DelfMPEG
+  and delfinampeg.device) and is based on ideas/code from:
+
+  - MPEG Audio Layer II decoder by Fredrik Noring and Tomas Berndtsson
+    (an mp2 player for Atari Falcon, DSP56K code)
+  - amp11 by Niklas Beisert (clean and fast C++ code)
+  - FalcAMP by Denis "STGhost" Huguet and David "Splash" Carrere
+    (an mp3 player for Atari Falcon, DSP56K code)
+  - reference code by MPEG Software Simulation Group ("the original" C code)
+
+
+
+# author
+
+  mailto: smack42@web.de
+
+  mhidelfina.library - MHI driver for Delfina DSP
+  Copyright (C) 2026  Michael Henke
+
+  This program is free software; you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation; either version 2 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License along
+  with this program; if not, see <https://www.gnu.org/licenses/>.

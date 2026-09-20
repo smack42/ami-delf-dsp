@@ -27,13 +27,13 @@
 
 
 /* #define DEBUG = enable auto-expunge and debug output = larger and slower code! */
-#define DEBUG
+/*#define DEBUG*/
 
 
 #define VERSION     1
 #define REVISION    0
-#define DATETXT     "19.09.2026"
-#define VERSTXT     "1.0_dev"
+#define DATETXT     "20.09.2026"
+#define VERSTXT     "1.0"
 #define LIBNAME     "mhidelfina.library"
 #define IDSTRING    LIBNAME " " VERSTXT " (" DATETXT ")"
 
@@ -137,4 +137,3 @@ extern void __asm   i_MHISetParam(register __a3 APTR handle, register __d0 UWORD
 /* functions in MPEGdecoder.c */
 extern void MPEG_init(void);
 extern void MPEG_close(void);
-extern void MPEG_setvolume(void);
