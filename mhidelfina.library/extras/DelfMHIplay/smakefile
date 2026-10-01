@@ -1,0 +1,9 @@
+
+DelfMHIplay: DelfMHIplay.o
+	sc LINK DelfMHIplay.o TO DelfMHIplay
+
+DelfMHIplay.o: DelfMHIplay.c
+	sc DelfMHIplay.c
+
+clean:
+	-delete \#?.o \#?.lnk DelfMHIplay
