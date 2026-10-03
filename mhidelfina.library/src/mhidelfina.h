@@ -32,8 +32,8 @@
 
 #define VERSION     1
 #define REVISION    0
-#define DATETXT     "20.09.2026"
-#define VERSTXT     "1.0"
+#define DATETXT     "03.10.2026"
+#define VERSTXT     "1.1_dev"
 #define LIBNAME     "mhidelfina.library"
 #define IDSTRING    LIBNAME " " VERSTXT " (" DATETXT ")"
 
@@ -77,6 +77,8 @@ struct delfinaMPEG
     UWORD   II_forcemono, III_forcemono, forcemono;
     ULONG   II_dacrate, III_dacrate, dacrate;
     UBYTE   *delfcopypt;
+    STRPTR  txtLayer, txtFreq, txtMode;
+    ULONG   frameCount, frameBitrateSum;
 };
 
 /* used by MHI API-functions and internally as global vars */
@@ -88,6 +90,7 @@ struct mhidelfinaHandle
     ULONG               delfVolumeLeft, delfVolumeRight;
     UBYTE               mhistatus, mhioutofdata, doChangeVolume;
     enum Decoder        activedecoder;
+    UBYTE               mhiExtStreamInfoBuffer[255], mhiExtDoStreamInfo;
     struct delfinaMPEG  mpeg;
 };
 
@@ -137,3 +140,4 @@ extern void __asm   i_MHISetParam(register __a3 APTR handle, register __d0 UWORD
 /* functions in MPEGdecoder.c */
 extern void MPEG_init(void);
 extern void MPEG_close(void);
+extern void MPEG_queryStreamInfo(void);

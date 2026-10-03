@@ -21,7 +21,12 @@
 
 #include <proto/exec.h>
 #include <exec/memory.h>
+#include <proto/dos.h>
+
 #include "mhidelfina.h"
+
+/* proposed MHI extensions - experimental implementation */
+#include "mhi_extensions.h"
 
 /* global vars */
 struct DosLibrary *DOSBase = NULL;  /* init -> expunge */
@@ -60,15 +65,49 @@ libExpungeLibraries(void)
 
 
 static void
+mhiExtQueryStreamInfo(void)
+{
+    if (theHandle->activedecoder != DEC_NONE && theHandle->mhiExtDoStreamInfo)
+    {
+        theHandle->mhiExtStreamInfoBuffer[0] = 0;
+        MPEG_queryStreamInfo();
+        SetVar(MHI_EXT_QUERY_STREAMINFO, theHandle->mhiExtStreamInfoBuffer, -1, GVF_LOCAL_ONLY);
+    }
+}
+
+static void
+mhiExtSetParam(void)
+{
+    UBYTE var[2];
+    var[0] = 0;
+    GetVar(MHI_EXT_SETPARAM_STREAMINFO, var, sizeof(var), GVF_LOCAL_ONLY);
+    if (var[0] == '1')
+    {
+        KPutStr("MHI_EXT_SETPARAM_STREAMINFO is ON !!!\n");
+        theHandle->mhiExtDoStreamInfo = 1;
+    }
+    else
+    {
+        KPutStr("MHI_EXT_SETPARAM_STREAMINFO is OFF\n");
+        theHandle->mhiExtDoStreamInfo = 0;
+    }
+}
+
+static void
 decoderInit(void)
 {
-    MPEG_init();
+    if (theHandle->activedecoder == DEC_NONE)
+    {
+        mhiExtSetParam();
+        MPEG_init();
+    }
 }
 
 static void
 decoderClose(void)
 {
     MPEG_close();
+    DeleteVar(MHI_EXT_QUERY_STREAMINFO, GVF_LOCAL_ONLY);
 }
 
 
@@ -209,6 +248,7 @@ i_MHIGetEmpty(register __a3 APTR handle)
     Disable();
     node = (struct mhibufferNode*) RemHead((struct List*) &h->list_getempty);
     Enable();
+    mhiExtQueryStreamInfo();
     if (node != NULL)
     {
         AddTail((struct List*) &h->list_unused, (struct Node*) node);

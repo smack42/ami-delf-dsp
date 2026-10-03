@@ -21,6 +21,7 @@
 
 #include <proto/exec.h>
 #include <exec/memory.h>
+#include <dos.h>
 
 #include "mhidelfina.h"
 #include "MPEG_PCM.h"
@@ -61,6 +62,33 @@ static const UBYTE mp2translate[3][2][16] =
           { { 0,3,3,3,3,3,3,0,0,0,1,1,1,1,1,0 } ,    /* 32000 stereo */
             { 0,3,3,0,0,0,1,1,1,1,1,1,1,1,1,0 } } }; /* 32000 mono   */
 static const UBYTE mp2sblimit[4]={27,30,8,12};
+
+static const STRPTR mpgModename[4] = { "stereo", "j-stereo", "dual-ch", "single-ch" };
+static const STRPTR mpgfreqTxt[4]  = { "44.1", "48", "32", "0" };
+
+
+
+/* PutChProc for RawDoFmt; SAS/C specific */
+/* from Amiga ROM Kernel Reference Manual AmigaDOS by Thomas Richter */
+static void prbuf(char c)
+{
+    __emit(0x16c0); /* move.b D0,(A3)+ */
+}
+
+void
+MPEG_queryStreamInfo(void)
+{
+    ULONG args[5];
+    if (theHandle->activedecoder != DEC_MPEG1_L2 && theHandle->activedecoder != DEC_MPEG1_L3) return;
+    KPutStr("MPEG_queryStreamInfo\n");
+    args[0] = (ULONG) theHandle->mpeg.txtLayer;
+    args[1] = (ULONG) theHandle->mpeg.txtFreq;
+    args[2] = (ULONG) theHandle->mpeg.txtMode;
+    args[3] = theHandle->mpeg.frameCount == 0 ? 0 : theHandle->mpeg.frameBitrateSum / theHandle->mpeg.frameCount;
+    args[4] = theHandle->mpeg.frameCount;
+    RawDoFmt("MPEG-1 layer %s  %s kHz  %s  %ld kbps  frames=%ld",
+        args, prbuf, theHandle->mhiExtStreamInfoBuffer);
+}
 
 
 
@@ -117,8 +145,11 @@ retry_firstheader:
             u->currlen=ptmax-pt+4;
             u->firstheader=header;
             u->layer=4-((header>>17)&3);
+            u->txtLayer = (u->layer == 3 ? "III" : "II");
             u->freqidx=(header>>10)&3;
+            u->txtFreq = mpgfreqTxt[u->freqidx];
             u->mono=( (((header>>6)&3)==MPG_MD_MONO) ? 1 : 0 );
+            u->txtMode = mpgModename[(header>>6)&3];
 
             u->forcemono= u->layer==2 ? u->II_forcemono : u->III_forcemono;
             u->dacrate= u->layer==2 ? u->II_dacrate : u->III_dacrate;
@@ -357,9 +388,13 @@ soft_IntServer(void)
         }
         if(ch) /*found it!*/
         {
+            ULONG bitrate = (ULONG)mpgbitrate[u->layer-1][(ch>>12)&15];
+            u->frameBitrateSum += bitrate;
+            u->frameCount++;
             u->framebufoffset=0;
-            u->framebufleft=((ULONG)mpgbitrate[u->layer-1][(ch>>12)&15]*144000)/mpgfreq[(ch>>10)&3]+((ch>>9)&1)-4;
+            u->framebufleft=(bitrate*144000)/mpgfreq[(ch>>10)&3]+((ch>>9)&1)-4;
             u->II_translate=mp2translate[u->freqidx][u->mono][(ch>>12)&15];
+            u->txtMode = mpgModename[(ch>>6)&3];
             if(((ch>>6)&3)==MPG_MD_JOINT_STEREO)
             {
                 u->modext=(ch>>4)&3;

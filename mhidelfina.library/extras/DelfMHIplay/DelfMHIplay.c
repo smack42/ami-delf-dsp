@@ -31,7 +31,10 @@
 #include <proto/mhi.h>
 #include <libraries/mhi.h>
 
-UBYTE version[] = "\0$VER: DelfMHIplay 0.1 (01.10.2026)";
+/* proposed MHI extensions - experimental implementation */
+#include "//src/mhi_extensions.h"
+
+UBYTE version[] = "\0$VER: DelfMHIplay 0.2_dev (03.10.2026)";
 
 long __oslibversion = 37; /* require OS 2.04+ */
 
@@ -113,6 +116,7 @@ BOOL initMHI(void)
                 MHIQuery(MHIQ_DECODER_NAME),
                 MHIQuery(MHIQ_AUTHOR),
                 MHIQuery(MHIQ_DECODER_VERSION) );
+        SetVar(MHI_EXT_SETPARAM_STREAMINFO, "1", -1, GVF_LOCAL_ONLY);
     }
     return TRUE; /* success */
 }
@@ -135,6 +139,7 @@ void closeMHI(void)
     }
     if (mhiSignal >= 0) { FreeSignal((LONG) mhiSignal); }
     if (MHIBase) { CloseLibrary(MHIBase); }
+    DeleteVar(MHI_EXT_SETPARAM_STREAMINFO, GVF_LOCAL_ONLY);
 }
 
 
@@ -192,7 +197,10 @@ UBYTE playFile(void)
         }
         if (verbose)
         {
-            Printf("\r  playing %lc ", anim4[anim++ & 3]);
+            UBYTE si[80];
+            si[0] = 0;
+            GetVar(MHI_EXT_QUERY_STREAMINFO, si, sizeof(si), GVF_LOCAL_ONLY);
+            Printf("\r  %s  playing %lc ", si, anim4[anim++ & 3]);
             Flush(Output());
         }
     }
