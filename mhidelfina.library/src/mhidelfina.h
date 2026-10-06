@@ -32,7 +32,7 @@
 
 #define VERSION     1
 #define REVISION    0
-#define DATETXT     "03.10.2026"
+#define DATETXT     "06.10.2026"
 #define VERSTXT     "1.1_dev"
 #define LIBNAME     "mhidelfina.library"
 #define IDSTRING    LIBNAME " " VERSTXT " (" DATETXT ")"
@@ -141,3 +141,4 @@ extern void __asm   i_MHISetParam(register __a3 APTR handle, register __d0 UWORD
 extern void MPEG_init(void);
 extern void MPEG_close(void);
 extern void MPEG_queryStreamInfo(void);
+extern void MPEG_discardBuffers(void);

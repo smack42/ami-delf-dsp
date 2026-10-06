@@ -37,3 +37,24 @@
  * uses AmigaDOS Local Variables of these names */
 #define MHI_EXT_SETPARAM_STREAMINFO "MHI_EXT_SETPARAM_STREAMINFO"
 #define MHI_EXT_QUERY_STREAMINFO    "MHI_EXT_QUERY_STREAMINFO"
+
+
+
+
+
+/* 2. Discard Buffers before Seeking
+ *
+ * Applications can order the MHI driver to discard the queued buffers and
+ * any internal buffer state, to prepare for an imminent discontinuity in
+ * the data stream, which is for example caused by the user seeking to a
+ * different position within the current audio track.
+ *
+ * Unlike the MHIStop() function, this new feature requires that the MHI
+ * driver keeps its internal context about the data format and audio
+ * settings, to allow it to decode the audio stream from the new
+ * position with a quick and smooth transition.
+ */
+
+/* experimental implementation in mhidelfina.library and DelfMHIplay
+ * uses a AmigaDOS Local Variable of this name */
+#define MHI_EXT_CONTROL_DISCARDBUFFERS "MHI_EXT_CONTROL_DISCARDBUFFERS"

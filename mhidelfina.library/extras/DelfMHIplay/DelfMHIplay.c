@@ -34,7 +34,7 @@
 /* proposed MHI extensions - experimental implementation */
 #include "//src/mhi_extensions.h"
 
-UBYTE version[] = "\0$VER: DelfMHIplay 0.2_dev (03.10.2026)";
+UBYTE version[] = "\0$VER: DelfMHIplay 0.2_dev (06.10.2026)";
 
 long __oslibversion = 37; /* require OS 2.04+ */
 
@@ -45,7 +45,7 @@ BPTR lock_newdir = NULL, lock_olddir = NULL;
 struct AsyncFile *file = NULL;
 
 struct Library *MHIBase = NULL;
-BYTE mhiSignal = -1, anim4[] = "-\\|/";
+BYTE mhiSignal = -1, anim4[] = "-\\|/", mhiSupportsDiscardBuffers = 0;
 ULONG mhiSigMask = 0, mhiNumBuffers = 4, mhiBufSize = 8 * 1024;
 APTR mhiHandle = NULL, *mhiBuffers = NULL;
 
@@ -66,6 +66,8 @@ void usage(void)
         "  -h or HELP ............... display this text\n"
         "use these keys during playback:\n"
         "  Ctrl-C ... skip to the next file\n"
+        "  Ctrl-E ... pause / continue\n"
+        "  Ctrl-F ... fast forward (MHI_EXT)\n"
         "  Ctrl-D ... quit\n\n"
         , mhidelfina
     );
@@ -118,6 +120,8 @@ BOOL initMHI(void)
                 MHIQuery(MHIQ_DECODER_VERSION) );
         SetVar(MHI_EXT_SETPARAM_STREAMINFO, "1", -1, GVF_LOCAL_ONLY);
     }
+    /* experimental feature: MHI_EXT_CONTROL_DISCARDBUFFERS */
+    mhiSupportsDiscardBuffers = (mhiDriverName == mhidelfina ? 1 : 0);
     return TRUE; /* success */
 }
 
@@ -140,6 +144,7 @@ void closeMHI(void)
     if (mhiSignal >= 0) { FreeSignal((LONG) mhiSignal); }
     if (MHIBase) { CloseLibrary(MHIBase); }
     DeleteVar(MHI_EXT_SETPARAM_STREAMINFO, GVF_LOCAL_ONLY);
+    DeleteVar(MHI_EXT_CONTROL_DISCARDBUFFERS, GVF_LOCAL_ONLY);
 }
 
 
@@ -154,7 +159,6 @@ UBYTE readAndQueue(APTR buffer)
         MHIQueueBuffer(mhiHandle, buffer, readLen);
     }
     return (UBYTE)(readLen != mhiBufSize  ?  1  :  0);  /* eof */
-
 }
 
 
@@ -163,7 +167,7 @@ UBYTE readAndQueue(APTR buffer)
 
 UBYTE playFile(void)
 {
-    UBYTE result = 0, eof = 0, anim = 0;
+    UBYTE result = 0, eof = 0, anim = 0, pause = 0;
     ULONG i, signals = 0;
     APTR buffer;
     Printf("\n  file: %s\n", filename);
@@ -178,12 +182,27 @@ UBYTE playFile(void)
         eof = readAndQueue(mhiBuffers[i]);
     }
     MHIPlay(mhiHandle);
+    SetSignal(0, SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F);
     /* streaming: refill buffers as needed */
     while (!eof)
     {
-        signals = Wait(mhiSigMask | SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D);
+        signals = Wait(mhiSigMask
+            | SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F);
         if (signals & SIGBREAKF_CTRL_C) { break; }
         if (signals & SIGBREAKF_CTRL_D) { result = 2; break; }
+        if (signals & SIGBREAKF_CTRL_E)
+        {
+            if (pause) { MHIPlay(mhiHandle);  pause = 0; }
+            else       { MHIPause(mhiHandle); pause = 1; }
+        }
+        if ((signals & SIGBREAKF_CTRL_F) && mhiSupportsDiscardBuffers)
+        {
+            SetVar(MHI_EXT_CONTROL_DISCARDBUFFERS, "1", -1, GVF_LOCAL_ONLY);
+            for (i = 0;  !eof && i < mhiNumBuffers;  ++i)
+            {
+                eof = readAndQueue(mhiBuffers[i]);
+            }
+        }
         if (signals & mhiSigMask)
         {
             while (!eof && (buffer = MHIGetEmpty(mhiHandle)))

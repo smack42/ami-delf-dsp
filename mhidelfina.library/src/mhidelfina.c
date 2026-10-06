@@ -94,6 +94,42 @@ mhiExtSetParam(void)
 }
 
 static void
+discardBuffers(void)
+{
+    APTR pt;
+    while ((pt = RemHead((struct List*) &theHandle->list_getempty)))
+    {
+        AddTail((struct List*) &theHandle->list_unused, (struct Node*) pt);
+    }
+    while ((pt = RemHead((struct List*) &theHandle->list_queued)))
+    {
+        AddTail((struct List*) &theHandle->list_unused, (struct Node*) pt);
+    }
+}
+
+static void
+mhiExtDiscardBuffers(void)
+{
+    if (theHandle->activedecoder != DEC_NONE)
+    {
+        UBYTE var[2];
+        var[0] = 0;
+        GetVar(MHI_EXT_CONTROL_DISCARDBUFFERS, var, sizeof(var), GVF_LOCAL_ONLY);
+        if (var[0] == '1')
+        {
+            KPutStr("MHI_EXT_CONTROL_DISCARDBUFFERS\n");
+            var[0] = theHandle->mhistatus;
+            theHandle->mhistatus = MHIF_PAUSED;
+            MPEG_discardBuffers();
+            discardBuffers();
+            theHandle->mhistatus = var[0];
+            var[0] = '0';
+            SetVar(MHI_EXT_CONTROL_DISCARDBUFFERS, var, -1, GVF_LOCAL_ONLY);
+        }
+    }
+}
+
+static void
 decoderInit(void)
 {
     if (theHandle->activedecoder == DEC_NONE)
@@ -211,6 +247,7 @@ i_MHIQueueBuffer(register __a3 APTR handle, register __a0 APTR buffer, register 
         KPutStr("ERROR: null or wrong handle or null buffer or zero size\n");
         return FALSE;
     }
+    mhiExtDiscardBuffers();
     node = (struct mhibufferNode*) RemHead((struct List*) &h->list_unused);
     if (node == NULL)
     {
@@ -300,7 +337,6 @@ void __asm
 i_MHIStop(register __a3 APTR handle)
 {
     struct mhidelfinaHandle *h = (struct mhidelfinaHandle*) handle;
-    APTR pt;
     KPutStr("i_MHIStop()\n");
     if (h == NULL || h != theHandle)
     {
@@ -309,14 +345,7 @@ i_MHIStop(register __a3 APTR handle)
     }
     h->mhistatus = MHIF_STOPPED;
     decoderClose();
-    while ((pt = RemHead((struct List*) &h->list_getempty)))
-    {
-        AddTail((struct List*) &h->list_unused, (struct Node*) pt);
-    }
-    while ((pt = RemHead((struct List*) &h->list_queued)))
-    {
-        AddTail((struct List*) &h->list_unused, (struct Node*) pt);
-    }
+    discardBuffers();
     h->mhioutofdata = 0;
 }
 

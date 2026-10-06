@@ -78,16 +78,36 @@ static void prbuf(char c)
 void
 MPEG_queryStreamInfo(void)
 {
+    struct delfinaMPEG *u;
     ULONG args[5];
     if (theHandle->activedecoder != DEC_MPEG1_L2 && theHandle->activedecoder != DEC_MPEG1_L3) return;
     KPutStr("MPEG_queryStreamInfo\n");
-    args[0] = (ULONG) theHandle->mpeg.txtLayer;
-    args[1] = (ULONG) theHandle->mpeg.txtFreq;
-    args[2] = (ULONG) theHandle->mpeg.txtMode;
-    args[3] = theHandle->mpeg.frameCount == 0 ? 0 : theHandle->mpeg.frameBitrateSum / theHandle->mpeg.frameCount;
-    args[4] = theHandle->mpeg.frameCount;
+    u = &theHandle->mpeg;
+    args[0] = (ULONG) u->txtLayer;
+    args[1] = (ULONG) u->txtFreq;
+    args[2] = (ULONG) u->txtMode;
+    args[3] = u->frameCount == 0 ? 0 : u->frameBitrateSum / u->frameCount;
+    args[4] = u->frameCount;
     RawDoFmt("MPEG-1 layer %s  %s kHz  %s  %ld kbps  frames=%ld",
         args, prbuf, theHandle->mhiExtStreamInfoBuffer);
+}
+
+
+
+
+
+void
+MPEG_discardBuffers(void)
+{
+    struct delfinaMPEG *u;
+    if (theHandle->activedecoder != DEC_MPEG1_L2 && theHandle->activedecoder != DEC_MPEG1_L3) return;
+    KPutStr("MPEG_discardBuffers\n");
+    u = &theHandle->mpeg;
+    returnEmptyBufferToMHI(u->currnode);
+    u->currnode=NULL; u->currpt=NULL; u->currlen=0;
+    u->framebufstate = FBS_GETHEADER;
+    u->bitresoffset = 0;
+    u->bitresok = 0;
 }
 
 
