@@ -20,7 +20,7 @@
 
 
 /** definitions for the Delfina-DSP56K program "MP2.o" **/
-extern struct DelfObj DSP56K_MP2;
+__far extern struct DelfObj DSP56K_MP2;
 
 
 /** offsets in PROGRAM section **/

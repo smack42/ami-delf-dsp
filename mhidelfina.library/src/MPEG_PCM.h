@@ -20,7 +20,7 @@
 
 
 /** definitions for the Delfina-DSP56K program "MPEG_PCM.o" **/
-extern struct DelfObj DSP56K_MPEG_PCM;
+__far extern struct DelfObj DSP56K_MPEG_PCM;
 
 
 /** offsets in PROGRAM section **/

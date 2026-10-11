@@ -4,13 +4,13 @@ mhidelfina.library: library.o mhidelfina.o MPEGdecoder.o MP2.o MP3.o MPEG_PCM.o
 
 
 library.o: library.c mhidelfina.h
-	sc library.c
+	sc library.c DISASSEMBLE=library.disasm
 
 mhidelfina.o: mhidelfina.c mhidelfina.h
-	sc OPT mhidelfina.c
+	sc OPT mhidelfina.c DISASSEMBLE=mhidelfina.disasm
 
 MPEGdecoder.o: MPEGdecoder.c mhidelfina.h MPEG_PCM.h MP2.h MP3.h
-	sc OPT MPEGdecoder.c
+	sc OPT MPEGdecoder.c DISASSEMBLE=MPEGdecoder.disasm
 
 MP2.o: MP2.a56
 	a56 MP2.a56 OBJECT _DSP56K_MP2 NOLIST
@@ -23,4 +23,4 @@ MPEG_PCM.o: MPEG_PCM.a56
 
 
 clean:
-	-delete \#?.o \#?.lnk mhidelfina.library
+	-delete \#?.o \#?.lnk \#?.map \#?.disasm mhidelfina.library

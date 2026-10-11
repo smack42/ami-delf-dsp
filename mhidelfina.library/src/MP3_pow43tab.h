@@ -9,7 +9,7 @@
 
 /* pow43tab[i] = (LONG)( exp( log((double)i) * 4.0/3.0 ) * 50.0 + 0.5 ); */
 
-static UBYTE pow43tab[8207*3] =
+__far static UBYTE pow43tab[8207*3] =
 {
 /* error = (doubleValue - intValue) / doubleValue */
 0x00,0x00,0x00, /* [0] error =  0.000000e+00 */

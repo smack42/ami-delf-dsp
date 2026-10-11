@@ -19,6 +19,7 @@
 *****************************************************************************/
 
 
+#define __USE_SYSBASE 1
 #include <proto/exec.h>
 #include <exec/memory.h>
 #include <proto/dos.h>

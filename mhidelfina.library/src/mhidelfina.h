@@ -31,8 +31,8 @@
 
 
 #define VERSION     1
-#define REVISION    0
-#define DATETXT     "06.10.2026"
+#define REVISION    1
+#define DATETXT     "11.10.2026"
 #define VERSTXT     "1.1_dev"
 #define LIBNAME     "mhidelfina.library"
 #define IDSTRING    LIBNAME " " VERSTXT " (" DATETXT ")"
